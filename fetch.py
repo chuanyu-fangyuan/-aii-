@@ -253,6 +253,11 @@ ENTITY_LEXICON = [
     "LLM", "Machine Learning", "Deep Learning", "Neural Network",
     "Reinforcement Learning", "Fine-tuning", "Inference", "Robotics",
     "Autonomous", "Regulation", "Copyright", "Benchmark",
+    "Multimodal", "Embedding", "Tokenizer", "Prompt", "Hallucination",
+    "Alignment", "Reasoning", "Pretraining", "Dataset", "GPU",
+    "Open Source", "Safety", "Alignment", "Startup", "Funding",
+    "Acquisition", "Chatbot", "Voice", "Video Generation", "Agentic",
+    "World Model", "Quantization", "Distillation", "Edge AI", "Chip",
 ]
 
 STOPWORDS = set(
@@ -262,7 +267,8 @@ STOPWORDS = set(
     "you your we our they their he she his her about after before over under "
     "into out up down just also now says said report reports ai "
     "across announce abstract type via using based toward towards open model "
-    "models arxiv http https com www language large systems system".split()
+    "models arxiv http https com www language large systems system "
+    "data time week day year years people work way ways make makes take".split()
 )
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9\-]{2,}")
@@ -314,6 +320,7 @@ def build_graph(rows: list) -> dict:
                 "label": r["title"],
                 "news_id": r["id"],
                 "source_name": r["source_name"],
+                "time": r["published_at"] or r["fetched_at"],
             }
         )
         kws = extract_keywords(f"{r['title']} {r['summary']}", freq)

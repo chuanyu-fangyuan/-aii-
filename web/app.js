@@ -68,7 +68,7 @@
   function renderDigest() {
     var box = $("digestCard");
     var d = state.data.digest;
-    if (state.range !== "today" || !d || !d.topics.length) {
+    if (state.range !== "today" || state.query.trim() || state.source || !d || !d.topics.length) {
       box.hidden = true;
       box.textContent = "";
       return;
@@ -123,6 +123,28 @@
     var items = filteredNews();
     $("emptyState").hidden = items.length > 0;
     $("clearBtn").hidden = !hasActiveFilter();
+
+    // 「今天」无内容时的降级：引导看近 7 天（如清晨尚未更新）
+    var emptyTitle = $("emptyState").querySelector(".empty-title");
+    var emptyDesc = $("emptyState").querySelector(".empty-desc");
+    var emptyBtn = $("emptyClearBtn");
+    if (!items.length && state.range === "today" && !state.query.trim() && !state.source) {
+      emptyTitle.textContent = "今天还没有收录新资讯";
+      emptyDesc.textContent = "数据每日 09:00（北京时间）自动更新，可以先看看近 7 天的内容。";
+      emptyBtn.textContent = "查看近 7 天";
+      emptyBtn.onclick = function () {
+        state.range = "week";
+        document.querySelectorAll(".date-tab").forEach(function (x) {
+          x.classList.toggle("active", x.dataset.range === "week");
+        });
+        renderAll();
+      };
+    } else {
+      emptyTitle.textContent = "没有匹配的资讯";
+      emptyDesc.textContent = "试试更换关键词、来源或时间范围。";
+      emptyBtn.textContent = "清除全部条件";
+      emptyBtn.onclick = clearAllFilters;
+    }
 
     items.forEach(function (it) {
       var card = h("article", "card");
@@ -330,6 +352,17 @@
   }
 
   /* ---------- 事件绑定 ---------- */
+  function clearAllFilters() {
+    state.range = "today";
+    state.query = "";
+    state.source = null;
+    $("searchInput").value = "";
+    document.querySelectorAll(".date-tab").forEach(function (x) {
+      x.classList.toggle("active", x.dataset.range === "today");
+    });
+    renderAll();
+  }
+
   function bindEvents() {
     document.querySelectorAll(".view-tab").forEach(function (t) {
       t.addEventListener("click", function () { switchView(t.dataset.view); });
@@ -351,18 +384,8 @@
         renderAll();
       }, 200);
     });
-    function clearAll() {
-      state.range = "today";
-      state.query = "";
-      state.source = null;
-      $("searchInput").value = "";
-      document.querySelectorAll(".date-tab").forEach(function (x) {
-        x.classList.toggle("active", x.dataset.range === "today");
-      });
-      renderAll();
-    }
+    function clearAll() { clearAllFilters(); }
     $("clearBtn").addEventListener("click", clearAll);
-    $("emptyClearBtn").addEventListener("click", clearAll);
     $("drawerClose").addEventListener("click", closeDrawer);
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape") closeDrawer();

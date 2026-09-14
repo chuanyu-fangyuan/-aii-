@@ -20,6 +20,16 @@
   function kwRadius(d) { return Math.min(6 + (d.count || 1) * 1.6, 16); }
   function newsRadius() { return 4.5; }
 
+  // 新闻节点按发布时间着色：越新越亮，呼应"每日更新"
+  function newsOpacity(d) {
+    if (!d.time) return 0.45;
+    var days = (Date.now() - new Date(d.time).getTime()) / 864e5;
+    if (days <= 1) return 1;
+    if (days <= 3) return 0.8;
+    if (days <= 7) return 0.6;
+    return 0.4;
+  }
+
   function neighborSet(links) {
     var map = {};
     links.forEach(function (l) {
@@ -82,7 +92,7 @@
     node.append("circle")
       .attr("r", function (d) { return d.type === "keyword" ? kwRadius(d) : newsRadius(); })
       .attr("fill", function (d) { return d.type === "keyword" ? "#f0b86e" : "#6e8efb"; })
-      .attr("fill-opacity", function (d) { return d.type === "keyword" ? 0.9 : 0.8; })
+      .attr("fill-opacity", function (d) { return d.type === "keyword" ? 0.9 : newsOpacity(d); })
       .attr("stroke", "#14161a")
       .attr("stroke-width", 1.5);
 
