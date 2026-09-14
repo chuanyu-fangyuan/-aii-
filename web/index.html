@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 情报站 · 每日自动更新的 AI 资讯</title>
+<meta name="description" content="聚合多个独立信息源的 AI 资讯，每日自动更新，支持搜索、筛选与关系图谱浏览。">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="header-row">
+    <h1 class="logo">AI <span>情报站</span></h1>
+    <nav class="view-tabs" role="tablist" aria-label="视图切换">
+      <button class="view-tab active" data-view="feed" role="tab" aria-selected="true">资讯流</button>
+      <button class="view-tab" data-view="graph" role="tab" aria-selected="false">关系图谱</button>
+    </nav>
+    <div class="update-badge" id="updateBadge" title="最近更新状态">
+      <span class="dot" id="updateDot"></span><span id="updateText">载入中…</span>
+    </div>
+  </div>
+  <div class="toolbar">
+    <div class="date-tabs" role="group" aria-label="时间范围">
+      <button class="date-tab active" data-range="today">今天</button>
+      <button class="date-tab" data-range="week">近 7 天</button>
+      <button class="date-tab" data-range="all">全部</button>
+    </div>
+    <input type="search" id="searchInput" class="search-input" placeholder="搜索标题或摘要…" aria-label="关键词搜索">
+    <div class="source-chips" id="sourceChips" aria-label="来源筛选"></div>
+    <button class="clear-btn" id="clearBtn" hidden>清除条件</button>
+  </div>
+</header>
+
+<main>
+  <section id="feedView" class="feed-view">
+    <div id="digestCard" class="digest" hidden></div>
+    <div id="feedList" class="feed-list" aria-live="polite"></div>
+    <div id="emptyState" class="empty-state" hidden>
+      <p class="empty-title">没有匹配的资讯</p>
+      <p class="empty-desc">试试更换关键词、来源或时间范围。</p>
+      <button class="clear-btn" id="emptyClearBtn">清除全部条件</button>
+    </div>
+  </section>
+
+  <section id="graphView" class="graph-view" hidden>
+    <svg id="graphSvg" role="img" aria-label="新闻与关键词关系图谱"></svg>
+    <div class="graph-legend">
+      <span><i class="lg lg-news"></i>新闻</span>
+      <span><i class="lg lg-kw"></i>关键词</span>
+      <span class="legend-hint">拖拽移动 · 滚轮缩放 · 点击节点查看</span>
+    </div>
+  </section>
+</main>
+
+<aside id="drawer" class="drawer" hidden aria-label="详情面板">
+  <button class="drawer-close" id="drawerClose" aria-label="关闭">×</button>
+  <div id="drawerContent"></div>
+</aside>
+
+<footer class="site-footer">
+  <div id="sourceStatus" class="source-status"></div>
+  <p class="footer-note">
+    发布时间以信息源原始时间为准（展示时区：Asia/Shanghai）；缺失时标注「发布时间未知」并展示采集时间。
+    摘要为来源提供或页面截取，本站不生成内容。数据来源见 README。
+  </p>
+</footer>
+
+<div id="loading" class="loading-overlay">数据载入中…</div>
+<div id="loadError" class="loading-overlay" hidden>
+  数据加载失败，请稍后刷新重试。<br><small id="loadErrorDetail"></small>
+</div>
+
+<script src="vendor/d3.v7.min.js"></script>
+<script src="app.js"></script>
+<script src="graph.js"></script>
+</body>
+</html>
