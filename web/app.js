@@ -139,6 +139,23 @@
         });
         renderAll();
       };
+    } else if (!items.length && state.range === "today" && state.source && !state.query.trim()) {
+      // 「今天 + 某来源」为空：多半是时区差异（欧美来源今天尚未发稿）
+      var srcName = "";
+      state.data.meta.sources.forEach(function (s) {
+        var n = state.data.news.find(function (x) { return x.source_id === s.source_id; });
+        if (s.source_id === state.source) srcName = (n && n.source_name) || s.source_id;
+      });
+      emptyTitle.textContent = "「" + srcName + "」今天暂无新资讯";
+      emptyDesc.textContent = "该来源最近的文章发布于昨天或更早（时区差异），不代表抓取失败。";
+      emptyBtn.textContent = "查看该来源近 7 天";
+      emptyBtn.onclick = function () {
+        state.range = "week";
+        document.querySelectorAll(".date-tab").forEach(function (x) {
+          x.classList.toggle("active", x.dataset.range === "week");
+        });
+        renderAll();
+      };
     } else {
       emptyTitle.textContent = "没有匹配的资讯";
       emptyDesc.textContent = "试试更换关键词、来源或时间范围。";

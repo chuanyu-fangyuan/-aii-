@@ -42,7 +42,7 @@ SOURCES = [
         "id": "hackernews",
         "name": "Hacker News",
         "type": "hn_api",
-        "url": "https://hn.algolia.com/api/v1/search_by_date?query=AI%20OR%20%22artificial%20intelligence%22%20OR%20LLM&tags=story&hitsPerPage=30",
+        "url": "https://hn.algolia.com/api/v1/search_by_date?query=AI&tags=story&hitsPerPage=40",
     },
     {
         "id": "techcrunch",
