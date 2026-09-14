@@ -268,7 +268,7 @@ STOPWORDS = set(
     "into out up down just also now says said report reports ai "
     "across announce abstract type via using based toward towards open model "
     "models arxiv http https com www language large systems system "
-    "data time week day year years people work way ways make makes take".split()
+    "data time week day year years people work way ways make makes take show".split()
 )
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9\-]{2,}")
