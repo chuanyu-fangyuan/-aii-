@@ -2,11 +2,13 @@ name: 每日数据更新与部署
 
 on:
   schedule:
-    # 每天两次：UTC 02:20 / 14:20，即北京时间 10:20 / 22:20。
-    # 两点考虑：① 刻意避开整点——GitHub 官方说明「每小时开始前后为高负载时段，定时任务可能被延迟或跳过」，
-    # 原先设在 UTC 00:17 的配置连续两轮均未触发（见 README「问题定位」）；
-    # ② 每天两次互为兜底，单次被调度器跳过时当天仍有更新。
-    - cron: "20 2,14 * * *"
+    # 每 3 小时一次，固定在第 20 分钟（UTC 偶数×3 的小时点）。
+    # 三点考虑：
+    #  ① 避开整点：GitHub 官方说明「每小时开始前后为高负载时段，定时任务可能被延迟甚至跳过」。
+    #     原先设在 UTC 00:17（紧邻整点）的配置连续多轮均未触发，见 README「案例四」。
+    #  ② 一天 8 次互为兜底：单次被调度器跳过时，当天仍有其它机会更新。
+    #  ③ 每 3 小时刷新一次，真实满足「每日自动更新」，也更贴近资讯类站点的新鲜度需求。
+    - cron: "20 */3 * * *"   # 北京时间 08:20 / 11:20 / 14:20 / 17:20 / 20:20 / 23:20 / 02:20 / 05:20
   workflow_dispatch: {}   # 手动触发入口：Actions 页面 → Run workflow
   push:
     branches: [main]      # 代码变更时也重新部署
@@ -34,14 +36,36 @@ jobs:
       - name: 安装依赖
         run: pip install -r requirements.txt
 
-      - name: 采集并导出数据
-        run: python fetch.py
-
-      - name: 提交更新结果
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "data: 自动更新 ${{ github.run_id }}"
-          file_pattern: "data/news.db web/data.json"
+      # 采集 + 提交 + 推送合并为一步，带并发重试。
+      # 原因：工作流 checkout 之后、push 之前，远端 main 可能被别的提交更新
+      #（网页编辑、手动 push、其它 run），此时普通 push 会被拒（non-fast-forward），
+      # 导致整次运行失败、数据未写入。2026-09-15 的 run 34927770343 就是这样失败的。
+      # 处理方式：每次尝试都先回到远端最新，再重新跑一次 fetch.py（采集是幂等的），
+      # 然后提交推送；最多重试 3 次，仍失败则让作业报错（不静默丢弃数据）。
+      - name: 采集、提交并推送（含并发重试）
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            echo "===== 第 $attempt 次尝试 ====="
+            git fetch origin main
+            git reset --hard origin/main
+            python fetch.py
+            git add data/news.db web/data.json
+            if git diff --cached --quiet; then
+              echo "本次无新增数据，无需提交"
+              exit 0
+            fi
+            git commit -m "data: 自动更新 ${{ github.run_id }}"
+            if git push origin HEAD:main; then
+              echo "第 $attempt 次推送成功"
+              exit 0
+            fi
+            echo "推送被拒（远端已更新），5 秒后重试"
+            sleep 5
+          done
+          echo "::error::连续 3 次推送失败，请检查仓库是否被其它流程持续更新"
+          exit 1
 
       - name: 上传静态站点
         uses: actions/upload-pages-artifact@v3
