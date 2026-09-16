@@ -42,7 +42,7 @@ cd web && python -m http.server 8080
 3. 工作流先运行 `fetch.py` 更新数据、提交 `data.json`，再把 `web/` 发布到 Pages
 
 演示地址：`https://<用户名>.github.io/<仓库名>/`（首次部署完成后可访问）。
-定时任务配置见 `.github/workflows/update.yml`（每日 cron + 手动触发，Actions 运行记录即验收凭据）。
+定时任务配置见 `.github/workflows/update.yml`：每天两次 cron（北京时间 10:20 / 22:20，刻意避开整点高负载时段）+ `workflow_dispatch` 手动触发。触发时机与运行结果以 **Actions 页面的运行记录**（Event 列显示 `Schedule` 或 `workflow_dispatch`）为准。
 
 ## 技术选型理由
 
@@ -70,7 +70,7 @@ cd web && python -m http.server 8080
 | 真实数据获取 | `python fetch.py` | ✅ 4 源成功；修复 HN 查询后重采，入库 99 条且当日数据新鲜 |
 | 重复导入幂等 | 连续运行两次 | ✅ 第二次全部 `inserted=0` |
 | 单源失败容错 | `python fetch.py --fail-source techcrunch` | ✅ 该源标记 `failed`，其他源正常，旧数据保留 |
-| 定时自动更新 | GitHub Actions cron | ⚠️ 配置已提交，**手动触发已验证，定时触发待首个周期验证** |
+| 定时自动更新 | GitHub Actions cron | ⚠️ 首版配置（UTC 00:17）经 API 核验**连续两轮均未被调度**（`event=schedule` 运行数为 0）；已修复并改为北京时间 10:20 / 22:20，2026-09-16 起观察触发结果，详见「案例四」 |
 
 （缺失日期、长标题、搜索无结果等界面状态已在前端实现并人工检查。）
 
@@ -110,6 +110,18 @@ cd web && python -m http.server 8080
 - 现象：页面底部状态栏与新闻卡片渲染重叠。
 - 定位：`html, body { height: 100% }` 把 body 锁死在视口高，flex 布局下 main 被压缩、内容溢出但仍可见，页脚却停在视口内。
 - 修复：改为 `min-height: 100vh`；同时补 `[hidden] { display: none !important }` 修复 flex 容器覆盖 hidden 属性的问题。
+
+**案例四：定时任务配置正确却从未被执行（清理「配置 ≠ 运行」）**
+
+- 现象：Actions 页面 7 条运行记录全部由 `push` 或手动触发，**没有一条是 Schedule 事件**；线上数据长时间停留在最近一次手动运行的结果。
+- 定位（逐项排除，而非猜测）：
+  1. 查 GitHub API `GET /repos/.../actions/runs?event=schedule` → `total_count = 0`，确认定时事件确实一次都没触发；
+  2. 用 YAML 解析器解析**线上实际文件**，`on.schedule` 解析结果为 `[{"cron": "17 0 * * *"}]`，语法合法 → 排除 YAML 错误；
+  3. 查 `GET /repos/.../actions/workflows` → `state: "active"`，未被停用 → 排除「60 天无活动自动禁用」；
+  4. 仓库每日均有提交，排除活跃度问题；cron 五字段表达式合法。
+- 根因判断：配置本身无误，问题出在**调度层**——原 cron 设在 UTC 00:17，紧邻整点。GitHub 官方文档明确说明「每小时开始前后为高负载时段，定时任务可能被延迟，极端情况下被跳过」，且新注册的 schedule 存在生效延迟。
+- 修复：① 规范化 `on` 块缩进（原文件由网页编辑器产生，`- cron` 与父键缩进不一致，虽可解析但不利于人工维护）；② cron 改为 `20 2,14 * * *`（北京时间 10:20 / 22:20），避开整点且每天两次互为兜底；③ 保留 `workflow_dispatch` 手动入口作为随时可用的人工触发通道。
+- 教训：**「配置已提交」不等于「任务已运行」**。定时任务的验收标准是运行记录中的 `Schedule` 事件，而不是配置文件里是否存在 `cron` 字段——这条正是题目「配置与运行分开」强调的点。
 
 ### 验证记录补充（界面层）
 
