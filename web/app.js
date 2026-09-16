@@ -129,8 +129,9 @@
     var emptyDesc = $("emptyState").querySelector(".empty-desc");
     var emptyBtn = $("emptyClearBtn");
     if (!items.length && state.range === "today" && !state.query.trim() && !state.source) {
+      var sched = scheduleInfo();
       emptyTitle.textContent = "今天还没有收录新资讯";
-      emptyDesc.textContent = "数据每日 09:00（北京时间）自动更新，可以先看看近 7 天的内容。";
+      emptyDesc.textContent = "数据" + sched.desc + "（北京时间 " + sched.times + "），可以先看看近 7 天的内容。";
       emptyBtn.textContent = "查看近 7 天";
       emptyBtn.onclick = function () {
         state.range = "week";
@@ -242,6 +243,17 @@
     return Math.floor(hh / 24) + " 天前";
   }
 
+  /* 更新节奏读自 data.json 的 meta.schedule（由 fetch.py 生成），不在前端硬编码，
+   * 否则调整定时策略后页面文案会与事实不符。旧数据缺该字段时回落到通用描述。 */
+  function scheduleInfo() {
+    var s = (state.data && state.data.meta && state.data.meta.schedule) || {};
+    return {
+      desc: s.description || "定时自动更新",
+      trigger: s.trigger || "由定时任务自动采集更新，无需打开网页、也无需保持电脑开机",
+      times: (s.times_local || []).join(" / ") || "定时",
+    };
+  }
+
   function renderStatus() {
     var meta = state.data.meta;
     var worst = "ok";
@@ -250,11 +262,12 @@
       else if (s.status === "no_new" && worst === "ok") worst = "warn";
     });
     $("updateDot").className = "dot " + worst;
+    var sched = scheduleInfo();
     $("updateText").textContent =
-      relativeTime(meta.generated_at) + "更新 · 每日 09:00 自动更新";
+      relativeTime(meta.generated_at) + "更新 · " + sched.desc;
     $("updateBadge").title =
       "数据生成于 " + formatTime(meta.generated_at, true) +
-      "（Asia/Shanghai）\n由 GitHub Actions 每天北京时间 09:00 自动采集更新，无需打开网页或保持电脑开机" +
+      "（Asia/Shanghai）\n" + sched.trigger +
       "\n验证方式：仓库 Actions 页面可查看每次运行记录";
 
     var box = $("sourceStatus");
