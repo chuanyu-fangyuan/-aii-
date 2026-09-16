@@ -2,8 +2,11 @@ name: 每日数据更新与部署
 
 on:
   schedule:
-   
-   - cron: "17 0 * * *"   # 北京 08:17
+    # 每天两次：UTC 02:20 / 14:20，即北京时间 10:20 / 22:20。
+    # 两点考虑：① 刻意避开整点——GitHub 官方说明「每小时开始前后为高负载时段，定时任务可能被延迟或跳过」，
+    # 原先设在 UTC 00:17 的配置连续两轮均未触发（见 README「问题定位」）；
+    # ② 每天两次互为兜底，单次被调度器跳过时当天仍有更新。
+    - cron: "20 2,14 * * *"
   workflow_dispatch: {}   # 手动触发入口：Actions 页面 → Run workflow
   push:
     branches: [main]      # 代码变更时也重新部署
@@ -20,6 +23,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
