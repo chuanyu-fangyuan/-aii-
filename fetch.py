@@ -412,6 +412,19 @@ def export_json(conn: sqlite3.Connection):
         "timezone_display": "Asia/Shanghai",
         "total": len(rows),
         "sources": runs,
+        # 更新节奏作为数据导出，而不是写死在前端文案里。
+        # 原因：调整定时策略后，前端文案若仍写旧时间就会与事实不符
+        #（曾出现页面标注「每日 09:00」而实际为每 3 小时的情况）。
+        "schedule": {
+            "description": "每 3 小时自动更新",
+            "trigger": (
+                "由外部定时器（cron-job.org）按 cron `20 */3 * * *` 调用 GitHub Actions "
+                "的 workflow_dispatch 接口触发采集与部署，无需打开网页、也无需保持电脑开机"
+            ),
+            "timezone": "Asia/Shanghai",
+            "times_local": ["02:20", "05:20", "08:20", "11:20",
+                            "14:20", "17:20", "20:20", "23:20"],
+        },
     }
     digest = build_digest(rows, graph)
     os.makedirs(os.path.dirname(EXPORT_PATH), exist_ok=True)
