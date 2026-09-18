@@ -44,10 +44,11 @@
 
   <section id="graphView" class="graph-view" hidden>
     <svg id="graphSvg" role="img" aria-label="新闻与关键词关系图谱"></svg>
+    <div id="graphNotice" class="graph-notice" hidden></div>
     <div class="graph-legend">
       <span><i class="lg lg-news"></i>新闻（越亮越新）</span>
-      <span><i class="lg lg-kw"></i>关键词</span>
-      <span class="legend-hint">拖拽移动 · 滚轮缩放 · 点击节点查看</span>
+      <span><i class="lg lg-kw"></i>关键词（越大越热）</span>
+      <span class="legend-hint">拖拽移动 · 滚轮缩放 · 悬停看关联 · 点击看详情</span>
     </div>
   </section>
 </main>
@@ -59,6 +60,7 @@
 
 <footer class="site-footer">
   <div id="sourceStatus" class="source-status"></div>
+  <p id="memoryNote" class="footer-note" hidden></p>
   <p class="footer-note">
     发布时间以信息源原始时间为准（展示时区：Asia/Shanghai）；缺失时标注「发布时间未知」并展示采集时间。
     摘要为来源提供或页面截取，本站不生成内容。数据来源见 README。
