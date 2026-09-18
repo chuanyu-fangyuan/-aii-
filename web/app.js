@@ -14,6 +14,7 @@
     data: null,
     kwByNewsId: {},        // news_id -> [keyword label]
     newsById: {},          // id -> news item
+    nodeById: null,        // graph node id -> node（一次建索引，替代反复 find）
   };
 
   /* ---------- DOM 工具 ---------- */
@@ -88,10 +89,7 @@
       var kwBtn = h("button", "digest-kw", tp.keyword);
       kwBtn.type = "button";
       kwBtn.title = "在关系图谱中查看";
-      kwBtn.addEventListener("click", function () {
-        switchView("graph");
-        window.GraphView.focusKeyword(tp.keyword);
-      });
+      kwBtn.addEventListener("click", function () { showKeywordInGraph(tp.keyword); });
       line.appendChild(kwBtn);
       line.appendChild(h("span", "digest-count", tp.count + " 篇相关报道"));
       item.appendChild(line);
@@ -195,10 +193,7 @@
           var pill = h("button", "meta-kw", kw);
           pill.type = "button";
           pill.title = "在关系图谱中查看「" + kw + "」";
-          pill.addEventListener("click", function () {
-            switchView("graph");
-            window.GraphView.focusKeyword(kw);
-          });
+          pill.addEventListener("click", function () { showKeywordInGraph(kw); });
           kwBox.appendChild(pill);
         });
         meta.appendChild(kwBox);
@@ -281,6 +276,26 @@
       st.appendChild(h("span", null, txt));
       box.appendChild(st);
     });
+
+    renderMemoryNote();
+  }
+
+  /* 记忆策略说明：把「为什么图谱里的条数比列表少」讲清楚。
+   * 数字全部读自 data.json 的 meta.window，改配置后页面文案自动跟着变。 */
+  function renderMemoryNote() {
+    var box = $("memoryNote");
+    var w = (state.data.meta && state.data.meta.window) || null;
+    if (!w) { box.hidden = true; return; }
+    box.hidden = false;
+    var parts = [
+      "采集配额：每天最多入库 " + w.daily_ingest_limit + " 条",
+      "记忆衰减：半衰期 " + w.graph_half_life_hours + " 小时",
+      "图谱容量：" + w.graph_days + " 天内按记忆强度保留 " + w.graph_max_news
+        + " 条资讯 + " + w.graph_max_keywords + " 个关键词",
+      "归档保留：" + w.db_retention_days + " 天",
+    ];
+    box.textContent = "数据治理（遗忘策略）— " + parts.join(" · ")
+      + "。被遗忘的内容不再进图谱，但仍在资讯流中可读。";
   }
 
   /* ---------- 抽屉 ---------- */
@@ -359,26 +374,105 @@
     });
     $("feedView").hidden = view !== "feed";
     $("graphView").hidden = view !== "graph";
-    if (view === "graph") renderGraph();
+    if (view === "graph") {
+      renderGraph();
+    } else if (window.GraphView.pause) {
+      // 离开图谱即暂停仿真：容器已 hidden，继续跑只是白烧 CPU
+      window.GraphView.pause();
+    }
+  }
+
+  /* 图谱子图：当前筛选命中的新闻 + 仍与它们相连的关键词。
+   *
+   * 旧实现直接沿用全量图谱，只在渲染前把新闻节点换成筛选结果，于是：
+   *   ① 关键词节点的 count 是全量口径，与眼前的筛选条件不符（「今天」里挂着 142 篇的 "News"）；
+   *   ② 与当前筛选毫无关系的关键词仍以孤立点形式留在图上，纯增加渲染量。
+   * 这里改成语义一致的子图：边定于新闻，关键词只保留在子图内仍然成立的。
+   */
+  function graphSubset() {
+    var inFilter = {};
+    filteredNews().forEach(function (it) { inFilter[it.id] = true; });
+
+    var newsNodes = [], present = {};
+    state.data.graph.nodes.forEach(function (n) {
+      if (n.type === "keyword") return;
+      if (inFilter[n.news_id]) { newsNodes.push(n); present[n.id] = true; }
+    });
+
+    var kwCount = {}, rawLinks = [];
+    state.data.graph.links.forEach(function (l) {
+      var s = typeof l.source === "object" ? l.source.id : l.source;
+      var t = typeof l.target === "object" ? l.target.id : l.target;
+      if (!present[s]) return;
+      kwCount[t] = (kwCount[t] || 0) + 1;
+      rawLinks.push({ source: s, target: t });
+    });
+
+    // 与后端 MIN_KEYWORD_DEGREE 同口径：只留被至少 2 条新闻共享的关键词。
+    // 子集太小时（例如只看单一来源）降级为不筛，否则会画成一片孤立点。
+    var ids = Object.keys(kwCount);
+    var keep = ids.filter(function (k) { return kwCount[k] >= 2; });
+    if (!keep.length) keep = ids;
+    var keepSet = {};
+    keep.forEach(function (k) { keepSet[k] = true; });
+
+    var kwNodes = keep.map(function (kid) {
+      var n = state.nodeById.get(kid);
+      return n ? Object.assign({}, n, { count: kwCount[kid] }) : null;
+    }).filter(Boolean);
+
+    return {
+      nodes: newsNodes.concat(kwNodes),
+      links: rawLinks.filter(function (l) { return keepSet[l.target]; }),
+      newsCount: newsNodes.length,
+      filteredCount: Object.keys(inFilter).length,
+    };
   }
 
   function renderGraph() {
-    var items = filteredNews();
-    var ids = {};
-    items.forEach(function (it) { ids["n" + it.id] = true; });
-    var g = state.data.graph;
-    var nodes = g.nodes.filter(function (n) { return n.type === "keyword" || ids[n.id]; });
-    var nodeIds = {};
-    nodes.forEach(function (n) { nodeIds[n.id] = true; });
-    var links = g.links.filter(function (l) {
-      var s = typeof l.source === "object" ? l.source.id : l.source;
-      var t = typeof l.target === "object" ? l.target.id : l.target;
-      return nodeIds[s] && nodeIds[t];
-    });
-    window.GraphView.render(nodes, links, {
+    var sub = graphSubset();
+    window.GraphView.render(sub.nodes, sub.links, {
       onNewsClick: function (node) { newsDrawer(state.newsById[node.news_id]); },
       onKeywordClick: function (node) { keywordDrawer(node.label); },
+      onBudgetCut: function (cut) { renderGraphNotice(cut, sub); },
     });
+  }
+
+  /* 图谱提示条：把「为什么图上的点比列表少」直接写在画布上，
+   * 而不是让使用者以为数据丢了。文案数字都来自真实的 data.json。 */
+  function renderGraphNotice(cut, sub) {
+    var box = $("graphNotice");
+    var w = (state.data.meta && state.data.meta.window) || {};
+    var lines = [];
+    if (cut) {
+      lines.push("当前筛选命中 " + cut.total + " 个节点，超出单屏可读范围；已按记忆强度只画最强的 "
+        + cut.shown + " 个（省略 " + cut.cut + " 个）。缩小时间范围可以看到更多细节。");
+    } else if (sub.filteredCount > sub.newsCount) {
+      lines.push("当前筛选的 " + sub.filteredCount + " 条资讯里，有 "
+        + (sub.filteredCount - sub.newsCount) + " 条已超出图谱记忆窗口（近 "
+        + (w.graph_days || 7) + " 天），不再进图；它们在资讯流中仍可阅读。");
+    }
+    if (w.graph_news_forgotten > 0) {
+      lines.push("本轮按记忆强度遗忘了 " + w.graph_news_forgotten
+        + " 条、关键词 " + w.graph_keywords_forgotten + " 个。");
+    }
+    box.hidden = !lines.length;
+    box.textContent = lines.join(" ");
+  }
+
+  /* 从资讯流/速读点关键词跳图谱：当前筛选里没有这个词时，
+   * 自动放宽时间范围再画一次，避免"点了没反应"的假死感。 */
+  function showKeywordInGraph(kw) {
+    switchView("graph");
+    var hit = window.GraphView.hasKeyword ? window.GraphView.hasKeyword(kw) : true;
+    if (!hit) {
+      state.range = "all";
+      document.querySelectorAll(".date-tab").forEach(function (x) {
+        x.classList.toggle("active", x.dataset.range === "all");
+      });
+      renderAll();
+    }
+    window.GraphView.focusKeyword(kw);
   }
 
   /* ---------- 事件绑定 ---------- */
@@ -440,13 +534,19 @@
     })
     .then(function (data) {
       state.data = data;
+      state.newsById = {};
       data.news.forEach(function (it) { state.newsById[it.id] = it; });
-      // 由图谱边构建 news -> keywords 映射
+      // 图谱节点索引：旧实现在遍历每条边时都对全量节点做一次 find()，
+      // 边数千 × 节点数千 ≈ 百万级比较，页面一进来就卡住。
+      // 改成先建一次 Map，整体降到 O(节点 + 边)。
+      state.nodeById = new Map();
+      data.graph.nodes.forEach(function (n) { state.nodeById.set(n.id, n); });
+      state.kwByNewsId = {};
       data.graph.links.forEach(function (l) {
-        var nid = l.source, kid = l.target;
-        if (typeof nid === "object") { nid = nid.id; kid = kid.id; }
-        var kwNode = data.graph.nodes.find(function (n) { return n.id === kid; });
-        var newsNode = data.graph.nodes.find(function (n) { return n.id === nid; });
+        var nid = typeof l.source === "object" ? l.source.id : l.source;
+        var kid = typeof l.target === "object" ? l.target.id : l.target;
+        var kwNode = state.nodeById.get(kid);
+        var newsNode = state.nodeById.get(nid);
         if (kwNode && newsNode && newsNode.news_id != null) {
           (state.kwByNewsId[newsNode.news_id] = state.kwByNewsId[newsNode.news_id] || []).push(kwNode.label);
         }
