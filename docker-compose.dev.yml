@@ -1,0 +1,27 @@
+# 开发环境 Docker Compose
+# 用法: docker compose -f docker-compose.dev.yml up -d
+# 前置: Docker Desktop 已启动
+
+version: "3.8"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16    # 自带 pgvector 扩展，省一步 CREATE EXTENSION
+    container_name: ai-daily-pg
+    environment:
+      POSTGRES_USER: aiuser
+      POSTGRES_PASSWORD: aipass
+      POSTGRES_DB: aidb
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql  # 首次启动自动执行
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiuser -d aidb"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:

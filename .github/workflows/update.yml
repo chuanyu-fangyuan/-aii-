@@ -72,8 +72,53 @@ jobs:
         with:
           path: web
 
-  deploy:
+  # ============================================================
+  # AI 分析 job（Week 1 新增）
+  # 对新增新闻调用 DeepSeek 进行分类/摘要/验证
+  # 使用 SQLite（news.db 已在 update 中更新并提交）
+  # ============================================================
+  analyze:
     needs: update
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main   # 确保拿到 update 推送后的最新代码
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 运行 AI 分析
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          python analyze.py
+          python fetch.py --export-only   # 重导出 data.json（含 AI 字段）
+
+      - name: 提交分析结果
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git reset --hard origin/main
+          # 重新运行分析（以防 update 和 analyze 之间 main 被更新）
+          python analyze.py
+          python fetch.py --export-only
+          git add data/news.db web/data.json
+          if git diff --cached --quiet; then
+            echo "本次无新增分析结果"
+            exit 0
+          fi
+          git commit -m "ai: 分析更新 ${{ github.run_id }}"
+          git push origin HEAD:main || echo "::warning::分析结果推送失败（可能被并发更新覆盖）"
+
+  deploy:
+    needs: analyze
     runs-on: ubuntu-latest
     environment:
       name: github-pages

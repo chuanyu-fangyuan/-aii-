@@ -6,16 +6,33 @@
   "use strict";
 
   var TZ = "Asia/Shanghai";
+  // API 基地址：本地开发用 localhost，线上部署时改为 Fly.io 域名
+  var API_BASE = window.AI_API_BASE || "";
   var state = {
     view: "feed",          // feed | graph
     range: "today",        // today | week | all
     query: "",
     source: null,          // null = 全部来源
+    category: null,        // null = 全部分类
     data: null,
+    dataSource: "static",  // static | api
     kwByNewsId: {},        // news_id -> [keyword label]
     newsById: {},          // id -> news item
     nodeById: null,        // graph node id -> node（一次建索引，替代反复 find）
   };
+
+  /* ---------- AI 分类配色（7 色 + 其他） ---------- */
+  var CATEGORY_COLORS = {
+    "模型":     "#007AFF",
+    "应用":     "#34C759",
+    "芯片硬件": "#FF9500",
+    "开源":     "#AF52DE",
+    "融资创业": "#FF3B30",
+    "政策监管": "#5856D6",
+    "研究突破": "#00C7BE",
+    "其他":     "#8E8E93",
+  };
+  var VALID_CATEGORIES = Object.keys(CATEGORY_COLORS);
 
   /* ---------- DOM 工具 ---------- */
   function h(tag, cls, text) {
@@ -54,6 +71,7 @@
       if (state.range === "today" && !isToday(it)) return false;
       if (state.range === "week" && !withinWeek(it)) return false;
       if (state.source && it.source_id !== state.source) return false;
+      if (state.category && it.ai_category !== state.category) return false;
       if (q) {
         var hay = (it.title + " " + (it.summary || "")).toLowerCase();
         if (hay.indexOf(q) === -1) return false;
@@ -62,7 +80,7 @@
     });
   }
   function hasActiveFilter() {
-    return state.range !== "today" || !!state.query.trim() || !!state.source;
+    return state.range !== "today" || !!state.query.trim() || !!state.source || !!state.category;
   }
 
   /* ---------- 渲染：今日速读 ---------- */
@@ -173,7 +191,37 @@
       title.appendChild(a);
       card.appendChild(title);
 
-      if (it.summary) card.appendChild(h("p", "card-summary", it.summary));
+      // AI 分类 chip（有分类才渲染）
+      if (it.ai_category && VALID_CATEGORIES.indexOf(it.ai_category) !== -1) {
+        var chip = h("span", "ai-chip", it.ai_category);
+        chip.style.backgroundColor = CATEGORY_COLORS[it.ai_category] + "18";
+        chip.style.color = CATEGORY_COLORS[it.ai_category];
+        chip.style.borderColor = CATEGORY_COLORS[it.ai_category] + "40";
+        chip.title = (it.ai_summary_zh || "AI 分类");
+        chip.style.cursor = "pointer";
+        chip.addEventListener("click", function (e) {
+          e.stopPropagation();
+          state.category = state.category === it.ai_category ? null : it.ai_category;
+          renderAll();
+        });
+        card.appendChild(chip);
+      }
+
+      // AI 中文摘要（优先展示，无则用原始 summary）
+      var summaryText = it.ai_summary_zh || it.summary || "";
+      if (summaryText) card.appendChild(h("p", "card-summary", summaryText));
+
+      // 验证角标（Day 6）
+      if (it.verification) {
+        var vIcon = it.verification === "confirmed" ? "✅" :
+                    it.verification === "disputed" ? "❌" :
+                    it.verification === "unverified" ? "⚠️" : "";
+        if (vIcon) {
+          var vBadge = h("span", "verify-badge", vIcon);
+          vBadge.title = it.verification_note || it.verification;
+          card.appendChild(vBadge);
+        }
+      }
 
       var meta = h("div", "card-meta");
       meta.appendChild(h("span", "meta-source", it.source_name));
@@ -480,6 +528,7 @@
     state.range = "today";
     state.query = "";
     state.source = null;
+    state.category = null;
     $("searchInput").value = "";
     document.querySelectorAll(".date-tab").forEach(function (x) {
       x.classList.toggle("active", x.dataset.range === "today");
@@ -526,23 +575,60 @@
     else renderGraph();
   }
 
+  /* ---------- 双数据源：API 优先，失败回落静态 data.json ---------- */
+  function loadData() {
+    // 如果有 API 基地址，先尝试从 API 获取
+    if (API_BASE) {
+      return fetch(API_BASE + "/news?limit=200", { cache: "no-cache" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("API HTTP " + r.status);
+          return r.json();
+        })
+        .then(function (apiData) {
+          // 将 API 响应转换为与 data.json 兼容的格式
+          state.dataSource = "api";
+          return {
+            meta: {
+              generated_at: new Date().toISOString(),
+              total: apiData.total,
+              sources: apiData.sources || [],
+            },
+            news: apiData.items || [],
+            graph: { nodes: [], links: [] },
+            digest: { topics: [] },
+          };
+        })
+        .catch(function () {
+          // API 失败，回落静态文件
+          console.warn("[AI 情报站] API 不可用，回落静态 data.json");
+          state.dataSource = "static";
+          return loadStaticData();
+        });
+    }
+    // 无 API 配置，直接用静态文件
+    state.dataSource = "static";
+    return loadStaticData();
+  }
+
+  function loadStaticData() {
+    return fetch("data.json", { cache: "no-cache" })
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      });
+  }
+
   /* ---------- 启动 ---------- */
-  fetch("data.json", { cache: "no-cache" })
-    .then(function (r) {
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      return r.json();
-    })
+  loadData()
     .then(function (data) {
       state.data = data;
       state.newsById = {};
       data.news.forEach(function (it) { state.newsById[it.id] = it; });
-      // 图谱节点索引：旧实现在遍历每条边时都对全量节点做一次 find()，
-      // 边数千 × 节点数千 ≈ 百万级比较，页面一进来就卡住。
-      // 改成先建一次 Map，整体降到 O(节点 + 边)。
+      // 图谱节点索引
       state.nodeById = new Map();
-      data.graph.nodes.forEach(function (n) { state.nodeById.set(n.id, n); });
+      (data.graph.nodes || []).forEach(function (n) { state.nodeById.set(n.id, n); });
       state.kwByNewsId = {};
-      data.graph.links.forEach(function (l) {
+      (data.graph.links || []).forEach(function (l) {
         var nid = typeof l.source === "object" ? l.source.id : l.source;
         var kid = typeof l.target === "object" ? l.target.id : l.target;
         var kwNode = state.nodeById.get(kid);

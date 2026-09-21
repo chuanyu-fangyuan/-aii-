@@ -2,3 +2,27 @@ __pycache__/
 *.pyc
 shot-*.png
 .DS_Store
+
+# Virtual environment
+.venv/
+venv/
+
+# Environment variables (API keys etc.)
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Python
+*.egg-info/
+dist/
+build/
+
+# Temporary files
+_live.json
+_*.json

@@ -229,6 +229,20 @@ def init_db(conn: sqlite3.Connection):
         );
         """
     )
+    # 增量迁移：给已存在的 news 表添加 AI 字段
+    existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(news)").fetchall()}
+    for col_name, sql in [
+        ("ai_category", "ALTER TABLE news ADD COLUMN ai_category TEXT"),
+        ("ai_summary_zh", "ALTER TABLE news ADD COLUMN ai_summary_zh TEXT"),
+        ("importance", "ALTER TABLE news ADD COLUMN importance INTEGER NOT NULL DEFAULT 0"),
+        ("verification", "ALTER TABLE news ADD COLUMN verification TEXT"),
+        ("verification_note", "ALTER TABLE news ADD COLUMN verification_note TEXT"),
+        ("entities_json", "ALTER TABLE news ADD COLUMN entities_json TEXT DEFAULT '[]'"),
+        ("ai_status", "ALTER TABLE news ADD COLUMN ai_status TEXT NOT NULL DEFAULT 'pending'"),
+    ]:
+        if col_name not in existing_cols:
+            conn.execute(sql)
+    conn.commit()
 
 
 def upsert_items(conn: sqlite3.Connection, items: list) -> int:
@@ -523,7 +537,9 @@ def export_json(conn: sqlite3.Connection, pruned: int = 0):
         dict(r)
         for r in conn.execute(
             """SELECT id, title, url, summary, source_id, source_name,
-                      published_at, published_unknown, fetched_at
+                      published_at, published_unknown, fetched_at,
+                      ai_category, ai_summary_zh, importance,
+                      verification, verification_note, entities_json
                FROM news
                WHERE COALESCE(published_at, fetched_at) >= ?
                ORDER BY COALESCE(published_at, fetched_at) DESC
