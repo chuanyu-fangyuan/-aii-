@@ -81,6 +81,8 @@ jobs:
     needs: update
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -94,8 +96,6 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: 运行 AI 分析
-        env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
           python analyze.py
           python fetch.py --export-only   # 重导出 data.json（含 AI 字段）
