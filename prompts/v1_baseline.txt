@@ -12,14 +12,14 @@
 请输出以下 JSON 结构（必须是合法 JSON，不要包含 markdown 代码块标记）:
 
 ```json
-{
+{{
   "category": "从以下选项中选择一个: 模型/应用/芯片硬件/开源/融资创业/政策监管/研究突破/其他",
   "summary_zh": "用中文写 50-100 字的摘要，概括核心信息和影响",
   "importance": 1到5的整数(1=一般资讯, 3=值得关注, 5=重大突破),
   "verification": "从以下选项中选择一个: confirmed/unverified/disputed",
   "verification_note": "简要说明验证依据，30字以内",
   "entities": ["提取的关键实体名称列表，如公司名、产品名、技术名，最多5个"]
-}
+}}
 ```
 
 ## 分类说明
