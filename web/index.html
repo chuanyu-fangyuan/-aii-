@@ -14,6 +14,7 @@
     <nav class="view-tabs" role="tablist" aria-label="视图切换">
       <button class="view-tab active" data-view="feed" role="tab" aria-selected="true">资讯流</button>
       <button class="view-tab" data-view="graph" role="tab" aria-selected="false">关系图谱</button>
+      <button class="view-tab" data-view="ask" role="tab" aria-selected="false">AI 问答</button>
     </nav>
     <div class="update-badge" id="updateBadge" title="最近更新状态">
       <span class="dot" id="updateDot"></span><span id="updateText">载入中…</span>
@@ -51,6 +52,32 @@
       <span class="legend-hint">拖拽移动 · 滚轮缩放 · 悬停看关联 · 点击看详情</span>
     </div>
   </section>
+
+  <section id="askView" class="ask-view" hidden>
+    <div class="ask-container">
+      <div class="ask-header">
+        <h2 class="ask-title">AI 智能问答</h2>
+        <p class="ask-subtitle">基于近期 AI 资讯的语义检索与智能回答</p>
+      </div>
+      <div class="ask-input-wrap">
+        <input type="text" id="askInput" class="ask-input" placeholder="输入你的问题，例如：OpenAI 最近有什么进展？" aria-label="提问输入">
+        <button id="askBtn" class="ask-btn">提问</button>
+      </div>
+      <div id="askResult" class="ask-result" hidden>
+        <div id="askLoading" class="ask-loading" hidden>
+          <div class="skeleton-line"></div>
+          <div class="skeleton-line short"></div>
+          <div class="skeleton-line"></div>
+        </div>
+        <div id="askAnswer" class="ask-answer" hidden></div>
+        <div id="askCitations" class="ask-citations" hidden>
+          <h3 class="citations-title">引用来源</h3>
+          <div id="citationsList" class="citations-list"></div>
+        </div>
+      </div>
+      <div id="askError" class="ask-error" hidden></div>
+    </div>
+  </section>
 </main>
 
 <aside id="drawer" class="drawer" hidden aria-label="详情面板">
@@ -75,5 +102,6 @@
 <script src="vendor/d3.v7.min.js"></script>
 <script src="app.js"></script>
 <script src="graph.js"></script>
+<script src="ask.js"></script>
 </body>
 </html>

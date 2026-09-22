@@ -2,3 +2,6 @@ feedparser>=6.0
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 pydantic>=2.0
+sentence-transformers>=6.0
+numpy>=2.0
+rank_bm25>=0.2

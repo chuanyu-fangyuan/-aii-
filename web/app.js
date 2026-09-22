@@ -422,6 +422,8 @@
     });
     $("feedView").hidden = view !== "feed";
     $("graphView").hidden = view !== "graph";
+    var askViewEl = $("askView");
+    if (askViewEl) askViewEl.hidden = view !== "ask";
     if (view === "graph") {
       renderGraph();
     } else if (window.GraphView.pause) {
@@ -575,6 +577,54 @@
     else renderGraph();
   }
 
+  /* ---------- 今日洞察（Day 12） ---------- */
+  function loadInsight() {
+    var url = API_BASE ? API_BASE + "/insight" : "insight.json";
+    fetch(url, { cache: "no-cache" })
+      .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+      .then(function (data) {
+        if (!data.available) return;
+        renderInsightCard(data);
+      })
+      .catch(function () { /* 洞察不可用，静默降级 */ });
+  }
+
+  function renderInsightCard(data) {
+    var box = $("digestCard");
+    if (!box || !data.topics || !data.topics.length) return;
+
+    box.hidden = false;
+    box.innerHTML = "";
+
+    var header = h("div", "digest-header");
+    header.appendChild(h("span", "digest-icon", "💡"));
+    header.appendChild(h("span", "digest-label", "今日 AI 洞察"));
+    if (data.date) {
+      header.appendChild(h("span", "digest-date", data.date));
+    }
+    box.appendChild(header);
+
+    if (data.summary) {
+      box.appendChild(h("p", "digest-summary", data.summary));
+    }
+
+    var topicsWrap = h("div", "digest-topics");
+    data.topics.forEach(function (topic) {
+      var chip = h("button", "digest-topic-chip", topic.title);
+      chip.type = "button";
+      chip.title = topic.description || "";
+      chip.addEventListener("click", function () {
+        state.query = topic.title;
+        $("searchInput").value = topic.title;
+        state.view = "feed";
+        switchView("feed");
+        renderAll();
+      });
+      topicsWrap.appendChild(chip);
+    });
+    box.appendChild(topicsWrap);
+  }
+
   /* ---------- 双数据源：API 优先，失败回落静态 data.json ---------- */
   function loadData() {
     // 如果有 API 基地址，先尝试从 API 获取
@@ -641,6 +691,7 @@
       renderStatus();
       bindEvents();
       renderAll();
+      loadInsight();
     })
     .catch(function (err) {
       $("loading").hidden = true;

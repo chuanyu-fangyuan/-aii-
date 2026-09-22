@@ -191,6 +191,107 @@ async def trigger_analysis(
 
 
 # ============================================================
+# RAG 问答（Day 10）
+# ============================================================
+
+RAG_PROMPT_PATH = os.path.join(BASE_DIR, "prompts", "rag_v1.txt")
+RAG_TIMEOUT = 25
+
+
+def _load_rag_prompt():
+    with open(RAG_PROMPT_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _build_context(results):
+    parts = []
+    for i, r in enumerate(results, 1):
+        summary = r.ai_summary_zh or "(无摘要)"
+        cat = f"[{r.ai_category}]" if r.ai_category else ""
+        parts.append(f"[{i}] {cat} {r.title}\n    来源: {r.source_name}\n    {summary}")
+    return "\n\n".join(parts)
+
+
+def _verify_citations(answer: str, results):
+    import re
+    valid_ids = {r.news_id for r in results}
+    cited_ids = set()
+    for m in re.finditer(r"\[(\d+)\]", answer):
+        idx = int(m.group(1)) - 1
+        if 0 <= idx < len(results):
+            cited_ids.add(results[idx].news_id)
+    return cited_ids
+
+
+@app.post("/ask", response_model=AskResponse)
+async def ask(request: AskRequest):
+    from retrieval import search
+    import requests as http_requests
+
+    results = search(request.query, top_k=request.top_k)
+    if not results:
+        return AskResponse(
+            answer="未找到相关资料，请尝试其他关键词。",
+            citations=[],
+        )
+
+    context = _build_context(results)
+    template = _load_rag_prompt()
+    prompt = template.replace("{context}", context).replace("{query}", request.query)
+
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if not api_key:
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(BASE_DIR, ".env"))
+        api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+
+    if not api_key:
+        return AskResponse(
+            answer="API Key 未配置，无法调用 AI 服务。",
+            citations=[Citation(news_id=r.news_id, title=r.title, link=r.url) for r in results[:3]],
+        )
+
+    try:
+        resp = http_requests.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "deepseek-chat",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+                "max_tokens": 800,
+            },
+            timeout=RAG_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        answer = data["choices"][0]["message"]["content"]
+    except Exception as e:
+        return AskResponse(
+            answer=f"AI 服务调用失败: {e}",
+            citations=[Citation(news_id=r.news_id, title=r.title, link=r.url) for r in results[:3]],
+        )
+
+    cited_ids = _verify_citations(answer, results)
+    citations = [
+        Citation(news_id=r.news_id, title=r.title, link=r.url)
+        for r in results
+        if r.news_id in cited_ids
+    ]
+
+    if not citations:
+        citations = [
+            Citation(news_id=r.news_id, title=r.title, link=r.url)
+            for r in results[:3]
+        ]
+
+    return AskResponse(answer=answer, citations=citations)
+
+
+# ============================================================
 # 统计信息
 # ============================================================
 
@@ -229,6 +330,24 @@ async def stats(db: sqlite3.Connection = Depends(get_db)):
         total_input_tokens=total_input,
         total_output_tokens=total_output,
     )
+
+
+# ============================================================
+# 今日洞察（Day 12）
+# ============================================================
+
+INSIGHT_PATH = os.path.join(BASE_DIR, "data", "insight.json")
+
+
+@app.get("/insight")
+async def get_insight():
+    if not os.path.exists(INSIGHT_PATH):
+        return {"available": False, "message": "暂无今日洞察"}
+
+    with open(INSIGHT_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    return {"available": True, **data}
 
 
 # ============================================================

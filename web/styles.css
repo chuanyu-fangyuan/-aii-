@@ -434,6 +434,137 @@ main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   .graph-notice { font-size: 11.5px; padding: 6px 10px; top: 8px; max-height: 4.8em; overflow: hidden; }
 }
 
+/* ---------- 今日洞察卡片 ---------- */
+.digest-summary {
+  color: var(--text-dim); font-size: 14px; line-height: 1.6;
+  margin: 8px 0 12px;
+}
+.digest-topics {
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.digest-topic-chip {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid rgba(110, 142, 251, .2);
+  border-radius: 20px;
+  padding: 6px 14px;
+  font: inherit; font-size: 13px; font-weight: 500;
+  cursor: pointer;
+  transition: all .2s;
+}
+.digest-topic-chip:hover {
+  background: rgba(110, 142, 251, .2);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.digest-date {
+  color: var(--text-faint); font-size: 12px; margin-left: auto;
+}
+
+/* ---------- AI 问答视图 ---------- */
+.ask-view {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 20px;
+}
+.ask-container {
+  display: flex; flex-direction: column; gap: 24px;
+}
+.ask-header { text-align: center; }
+.ask-title {
+  font-size: 24px; font-weight: 700; margin: 0 0 8px;
+  background: linear-gradient(110deg, #fff 30%, var(--accent) 70%);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+}
+.ask-subtitle { color: var(--text-dim); font-size: 14px; margin: 0; }
+
+.ask-input-wrap {
+  display: flex; gap: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px;
+  transition: border-color .2s;
+}
+.ask-input-wrap:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.ask-input {
+  flex: 1; background: transparent; border: none; outline: none;
+  color: var(--text); font: inherit; font-size: 15px;
+  padding: 8px 12px;
+}
+.ask-input::placeholder { color: var(--text-faint); }
+.ask-btn {
+  background: var(--gradient-accent);
+  color: #fff; border: none; border-radius: var(--radius-sm);
+  padding: 10px 24px; font: inherit; font-weight: 600;
+  cursor: pointer; white-space: nowrap;
+  transition: opacity .2s;
+}
+.ask-btn:hover { opacity: .9; }
+.ask-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.ask-result {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+}
+.ask-loading { display: flex; flex-direction: column; gap: 12px; }
+.skeleton-line {
+  height: 16px; border-radius: 8px;
+  background: linear-gradient(90deg, var(--bg-elev) 25%, rgba(255,255,255,.08) 50%, var(--bg-elev) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+.skeleton-line.short { width: 60%; }
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+.ask-answer {
+  color: var(--text); font-size: 15px; line-height: 1.75;
+  white-space: pre-wrap; word-break: break-word;
+}
+.ask-citations { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+.citations-title { font-size: 13px; color: var(--text-dim); margin: 0 0 12px; font-weight: 600; }
+.citations-list { display: flex; flex-direction: column; gap: 8px; }
+.citation-card {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  text-decoration: none; color: inherit;
+  transition: border-color .2s, background .2s;
+}
+.citation-card:hover {
+  border-color: var(--accent);
+  background: rgba(110, 142, 251, .06);
+}
+.citation-num {
+  color: var(--accent); font-weight: 700; font-size: 13px;
+  min-width: 24px; padding-top: 1px;
+}
+.citation-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.citation-title {
+  color: var(--text); font-size: 14px; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.citation-link {
+  color: var(--text-faint); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.ask-error {
+  background: rgba(251, 113, 133, .1);
+  border: 1px solid rgba(251, 113, 133, .3);
+  border-radius: var(--radius-sm);
+  padding: 14px 18px;
+  color: var(--fail); font-size: 14px;
+}
+
 /* ---------- 无障碍：尊重减少动效偏好 ---------- */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

@@ -157,6 +157,7 @@ def init_sqlite(conn: sqlite3.Connection):
         ("verification_note", "ALTER TABLE news ADD COLUMN verification_note TEXT"),
         ("entities_json", "ALTER TABLE news ADD COLUMN entities_json TEXT DEFAULT '[]'"),
         ("ai_status", "ALTER TABLE news ADD COLUMN ai_status TEXT NOT NULL DEFAULT 'pending'"),
+        ("embedding", "ALTER TABLE news ADD COLUMN embedding BLOB"),
     ]
     for col_name, sql in migrations:
         if col_name not in existing_cols:
