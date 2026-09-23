@@ -136,6 +136,10 @@ def parse_dt(dt: datetime) -> str:
 
 
 def fetch_hn_api(source: dict) -> list:
+    # 接口用 search_by_date（按时间倒序）保证「每日更新」的新鲜度，
+    # 代价是刚提交、还没人投票的帖子也会被抓进来。
+    # 因此：① 0 分 0 评论的直接跳过（多半是刚提交的噪音/垃圾帖）；
+    #      ② 摘要里不再一律自称「热帖」—— 分数够高才配得上这个词。
     data = json.loads(http_get(source["url"]))
     items = []
     for hit in data.get("hits", []):
@@ -143,12 +147,17 @@ def fetch_hn_api(source: dict) -> list:
         link = hit.get("url") or f"https://news.ycombinator.com/item?id={hit.get('objectID')}"
         if not title:
             continue
+        points = hit.get("points", 0) or 0
+        comments = hit.get("num_comments") or 0
+        if points == 0 and comments == 0:
+            continue
+        tag = "热帖" if points >= 20 else "新帖"
         published = hit.get("created_at")  # ISO 8601 UTC
         items.append(
             {
                 "title": title,
                 "url": link,
-                "summary": f"Hacker News 热帖 · {hit.get('points', 0)} 分 · {hit.get('num_comments') or 0} 评论",
+                "summary": f"Hacker News {tag} · {points} 分 · {comments} 评论",
                 "published_at": published if published else None,
                 "source_id": source["id"],
                 "source_name": source["name"],

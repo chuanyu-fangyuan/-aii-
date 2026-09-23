@@ -6,8 +6,6 @@
   "use strict";
 
   var TZ = "Asia/Shanghai";
-  // API 基地址：本地开发用 localhost，线上部署时改为 Fly.io 域名
-  var API_BASE = window.AI_API_BASE || "";
   var state = {
     view: "feed",          // feed | graph
     range: "today",        // today | week | all
@@ -15,7 +13,6 @@
     source: null,          // null = 全部来源
     category: null,        // null = 全部分类
     data: null,
-    dataSource: "static",  // static | api
     kwByNewsId: {},        // news_id -> [keyword label]
     newsById: {},          // id -> news item
     nodeById: null,        // graph node id -> node（一次建索引，替代反复 find）
@@ -256,7 +253,7 @@
   var STATUS_LABEL = { ok: "正常", no_new: "无新增", failed: "抓取失败" };
   function statusDot(status) {
     var dot = h("span", "dot");
-    dot.classList.add(status === "ok" ? "ok" : status === "no_new" ? "warn" : "fail");
+    dot.classList.add(status === "ok" ? "ok" : status === "no_new" ? "warn" : status === "failed" ? "fail" : "warn");
     return dot;
   }
 
@@ -277,7 +274,9 @@
 
   /* ---------- 更新时效展示 ---------- */
   function relativeTime(iso) {
-    var diff = Date.now() - new Date(iso).getTime();
+    var t = iso ? new Date(iso).getTime() : NaN;
+    if (!isFinite(t)) return "时间未知";
+    var diff = Date.now() - t;
     var m = Math.floor(diff / 6e4);
     if (m < 1) return "刚刚";
     if (m < 60) return m + " 分钟前";
@@ -319,7 +318,10 @@
       var name = (state.data.news.find(function (n) { return n.source_id === s.source_id; }) || {}).source_name || s.source_id;
       var st = h("span", "src-st");
       st.appendChild(statusDot(s.status));
-      var txt = name + " " + STATUS_LABEL[s.status] + " · " + relativeTime(s.run_at);
+      // 字段缺失时显示诚实文案，绝不渲染 undefined/NaN
+      var statusText = STATUS_LABEL[s.status] || s.status || "状态未知";
+      var runText = relativeTime(s.run_at);
+      var txt = name + " " + statusText + " · " + runText;
       if (s.status === "failed" && s.message) txt += "（" + s.message.split(":")[0] + "）";
       st.appendChild(h("span", null, txt));
       box.appendChild(st);
@@ -579,8 +581,8 @@
 
   /* ---------- 今日洞察（Day 12） ---------- */
   function loadInsight() {
-    var url = API_BASE ? API_BASE + "/insight" : "insight.json";
-    fetch(url, { cache: "no-cache" })
+    // 与主数据同源：读 fetch.py 生成的 insight.json，不走 API（理由见 loadData 注释）
+    fetch("insight.json", { cache: "no-cache" })
       .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
       .then(function (data) {
         if (!data.available) return;
@@ -625,42 +627,14 @@
     box.appendChild(topicsWrap);
   }
 
-  /* ---------- 双数据源：API 优先，失败回落静态 data.json ---------- */
+  /* ---------- 数据源：只用 fetch.py 生成的 data.json ----------
+   * 历史教训：这里曾做「API 优先、失败回落静态文件」的双数据源，
+   * 但 API /news 响应不含 graph、meta.window、sources.status/run_at，
+   * 本地 FastAPI 一旦在跑，首页就会拿到残缺数据 ——
+   * 表现为图谱全空 + 状态栏渲染出「undefined · NaN 天前」+ 假的「已退出记忆窗口」提示。
+   * 图谱与记忆策略必须和资讯流同源，所以主页面只用 data.json；
+   * API 仅保留给 AI 问答（ask.js 的 /ask 端点）。 */
   function loadData() {
-    // 如果有 API 基地址，先尝试从 API 获取
-    if (API_BASE) {
-      return fetch(API_BASE + "/news?limit=200", { cache: "no-cache" })
-        .then(function (r) {
-          if (!r.ok) throw new Error("API HTTP " + r.status);
-          return r.json();
-        })
-        .then(function (apiData) {
-          // 将 API 响应转换为与 data.json 兼容的格式
-          state.dataSource = "api";
-          return {
-            meta: {
-              generated_at: new Date().toISOString(),
-              total: apiData.total,
-              sources: apiData.sources || [],
-            },
-            news: apiData.items || [],
-            graph: { nodes: [], links: [] },
-            digest: { topics: [] },
-          };
-        })
-        .catch(function () {
-          // API 失败，回落静态文件
-          console.warn("[AI 情报站] API 不可用，回落静态 data.json");
-          state.dataSource = "static";
-          return loadStaticData();
-        });
-    }
-    // 无 API 配置，直接用静态文件
-    state.dataSource = "static";
-    return loadStaticData();
-  }
-
-  function loadStaticData() {
     return fetch("data.json", { cache: "no-cache" })
       .then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);

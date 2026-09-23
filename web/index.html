@@ -100,7 +100,9 @@
 </div>
 
 <script>
-  // API 基地址：本地开发指向 FastAPI 服务，线上部署改为 Fly.io 域名
+  // API 基地址：仅供 AI 问答（ask.js）调用 /ask 端点。
+  // 首页资讯流/图谱刻意不走 API —— 图谱与记忆策略由 fetch.py 离线算好写进 data.json，
+  // API 的 /news 响应不含这些字段，混用会出现「空图谱 + 误导性提示」。
   window.AI_API_BASE = "http://localhost:8000";
 </script>
 <script src="vendor/d3.v7.min.js"></script>
