@@ -1,0 +1,32 @@
+{
+  "listed_tools": [
+    "search_news",
+    "fetch_source",
+    "dedup_check",
+    "verify_claim",
+    "write_report"
+  ],
+  "search_news": {
+    "count": 3
+  },
+  "fetch_source": {
+    "count": 3
+  },
+  "dedup_check": {
+    "exists": false,
+    "note": "数据库中不存在该 URL"
+  },
+  "verify_claim": {
+    "ok": true,
+    "keys": [
+      "confidence",
+      "reasoning",
+      "sources",
+      "verdict"
+    ]
+  },
+  "write_report": {
+    "ok": true,
+    "len": 203
+  }
+}

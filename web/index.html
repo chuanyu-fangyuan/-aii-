@@ -99,6 +99,10 @@
   数据加载失败，请稍后刷新重试。<br><small id="loadErrorDetail"></small>
 </div>
 
+<script>
+  // API 基地址：本地开发指向 FastAPI 服务，线上部署改为 Fly.io 域名
+  window.AI_API_BASE = "http://localhost:8000";
+</script>
 <script src="vendor/d3.v7.min.js"></script>
 <script src="app.js"></script>
 <script src="graph.js"></script>

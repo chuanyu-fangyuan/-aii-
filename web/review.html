@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 情报站 - 审核管理</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .review-container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .review-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .review-filters {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    .filter-btn {
+      padding: 8px 16px;
+      border: 1px solid #444;
+      background: #1a1a1a;
+      color: #fff;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .filter-btn.active {
+      background: #007AFF;
+      border-color: #007AFF;
+    }
+    .review-card {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .review-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .review-type {
+      display: inline-block;
+      padding: 4px 8px;
+      background: #333;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .review-status {
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .status-pending { background: #FF9500; color: #000; }
+    .status-approved { background: #34C759; color: #000; }
+    .status-rejected { background: #FF3B30; color: #fff; }
+    .review-content {
+      margin-bottom: 12px;
+    }
+    .review-label {
+      color: #888;
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+    .review-value {
+      color: #fff;
+      margin-bottom: 12px;
+    }
+    .review-actions {
+      display: flex;
+      gap: 10px;
+    }
+    .btn-approve, .btn-reject {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .btn-approve {
+      background: #34C759;
+      color: #000;
+    }
+    .btn-reject {
+      background: #FF3B30;
+      color: #fff;
+    }
+    .review-note {
+      width: 100%;
+      padding: 8px;
+      background: #222;
+      border: 1px solid #444;
+      border-radius: 6px;
+      color: #fff;
+      margin-bottom: 10px;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 40px;
+      color: #888;
+    }
+    .back-link {
+      color: #007AFF;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AI 情报站</h1>
+    <nav>
+      <a href="index.html">资讯流</a>
+      <a href="index.html#graph">关系图谱</a>
+      <a href="index.html#ask">AI 问答</a>
+      <a href="review.html" class="active">审核管理</a>
+    </nav>
+  </header>
+
+  <div class="review-container">
+    <div class="review-header">
+      <h2>审核管理</h2>
+      <a href="index.html" class="back-link">← 返回首页</a>
+    </div>
+
+    <div class="review-filters">
+      <button class="filter-btn active" data-status="pending">待审核</button>
+      <button class="filter-btn" data-status="approved">已通过</button>
+      <button class="filter-btn" data-status="rejected">已拒绝</button>
+      <button class="filter-btn" data-status="all">全部</button>
+    </div>
+
+    <div id="reviewList"></div>
+  </div>
+
+  <script>
+    const API_BASE = window.AI_API_BASE || "http://localhost:8000";
+    let currentStatus = "pending";
+
+    async function loadReviews(status = "pending") {
+      currentStatus = status;
+      document.querySelectorAll(".filter-btn").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.status === status);
+      });
+
+      const resp = await fetch(`${API_BASE}/reviews?status=${status}`);
+      const data = await resp.json();
+
+      const list = document.getElementById("reviewList");
+      if (data.total === 0) {
+        list.innerHTML = '<div class="empty-state">暂无审核记录</div>';
+        return;
+      }
+
+      list.innerHTML = data.items.map(item => `
+        <div class="review-card" data-id="${item.id}">
+          <div class="review-card-header">
+            <span class="review-type">${item.review_type}</span>
+            <span class="review-status status-${item.status}">${item.status}</span>
+          </div>
+          <div class="review-content">
+            <div class="review-label">原始内容</div>
+            <div class="review-value">${item.original_value || "-"}</div>
+            <div class="review-label">建议值</div>
+            <div class="review-value">${item.suggested_value || "-"}</div>
+            ${item.reason ? `<div class="review-label">原因</div><div class="review-value">${item.reason}</div>` : ""}
+          </div>
+          ${item.status === "pending" ? `
+            <input type="text" class="review-note" placeholder="审核备注（可选）" data-note-id="${item.id}">
+            <div class="review-actions">
+              <button class="btn-approve" onclick="processReview(${item.id}, 'approve')">通过</button>
+              <button class="btn-reject" onclick="processReview(${item.id}, 'reject')">拒绝</button>
+            </div>
+          ` : `
+            <div class="review-label">审核备注</div>
+            <div class="review-value">${item.reviewer_note || "-"}</div>
+          `}
+        </div>
+      `).join("");
+    }
+
+    async function processReview(id, action) {
+      const noteInput = document.querySelector(`[data-note-id="${id}"]`);
+      const note = noteInput ? noteInput.value : "";
+
+      const resp = await fetch(`${API_BASE}/review/${id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, note }),
+      });
+
+      if (resp.ok) {
+        await loadReviews(currentStatus);
+      } else {
+        alert("操作失败");
+      }
+    }
+
+    document.querySelectorAll(".filter-btn").forEach(btn => {
+      btn.addEventListener("click", () => loadReviews(btn.dataset.status));
+    });
+
+    loadReviews("pending");
+  </script>
+</body>
+</html>

@@ -65,3 +65,26 @@ class TriggerResponse(BaseModel):
     status: str
     message: str
     candidates: int = 0
+
+
+class ReviewItem(BaseModel):
+    id: int
+    news_id: int
+    review_type: str
+    original_value: Optional[str] = None
+    suggested_value: Optional[str] = None
+    reason: Optional[str] = None
+    status: str
+    reviewer_note: Optional[str] = None
+    created_at: str
+    reviewed_at: Optional[str] = None
+
+
+class ReviewListResponse(BaseModel):
+    total: int
+    items: list[ReviewItem]
+
+
+class ReviewAction(BaseModel):
+    action: str = Field(..., description="approve 或 reject")
+    note: str = Field(default="", description="审核备注")

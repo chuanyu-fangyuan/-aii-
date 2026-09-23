@@ -26,3 +26,6 @@ build/
 # Temporary files
 _live.json
 _*.json
+
+# Pytest
+.pytest_cache/

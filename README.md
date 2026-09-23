@@ -220,3 +220,64 @@ GitHub UI 把 `workflow_dispatch` 显示成「手动运行」是它的分类方�
 - 长标题（122 字符）→ 两行截断正常
 - 移动端 390px 视口 → 资讯流 / 图谱 / 抽屉均可用（截图留存）
 
+
+---
+
+## Week 3：Agent 与评测（2026-09-22）
+
+本周把「流水线」升级为「能自主决策的 Agent」，并完成 RAG 评测 v2。
+
+### 新增能力
+
+| 模块 | 说明 |
+|---|---|
+| `agent/tools.py` | 5 个 LangChain 工具：search_news / fetch_source / dedup_check / verify_claim / write_report，全部复用已有模块，不重写 |
+| `agent/graph.py` | LangGraph 状态图：plan → gather → verify → synthesize → review → publish；条件边 verify 可疑→回 gather 补证（最多 2 轮防死循环）；状态持久化到 `agent_runs` 表 |
+| HITL 审核流 | 重要结论进 `pending_review` 表，`POST /review/{id}`（approve/reject + 理由），未审核内容不进线上，前端 `web/review.html` 审核页 |
+| MCP Server | `mcp_server/server.py` 用 FastMCP 4 暴露 5 个工具，可被 Claude Desktop / Cursor 调用 |
+| 评测 v2 | `evals/eval_rag.py`：RAGAS 口径三指标 + LLM-as-judge + 20 组问答对（含 2 道「资料不足」陷阱题）+ Prompt v1/v2 对比，报告见 `evals/report_week3.md` |
+
+### Week 3 验收记录（2026-09-22，三链路一次跑通）
+
+`tests/verify_week3.py` 单次运行依次执行三条链路（结果存 `data/week3_acceptance.json`）：
+
+| 链路 | 内容 | 结果 | 耗时 |
+|---|---|---|---|
+| A 分类/分析 | `analyze.py --limit 3` 真实分类 + 摘要 | ✅ | 4.7s |
+| B RAG 问答 | `/ask` 端点（TestClient 直调）带引用回答 | ✅ 引用 1 条 | 23.6s |
+| C Agent | `run_agent` 完整情报任务，产出 1389 字报告 | ✅ | 18.0s |
+
+其余验证：`pytest tests/test_tools.py` 8 passed；`tests/verify_mcp.py` 5 个工具全部列出并可调用（含 LLM 类工具）；RAGAS 三指标 v1/v2 对比有明确结论（差异在噪声内，v2 忠实度 1.00 略优，详见 report_week3.md）。
+
+### 失败模式与复盘（本周新增三条，均为真实事故）
+
+**案例八：ragas 与 Agent 生态依赖冲突（「评测库 vs 运行时」不可兼得）**
+
+- 现象：安装 ragas 后 `import ragas` 直接失败——0.2.15/0.4.3 均硬依赖 `langchain_community.chat_models.vertexai`，而 langchain-community 0.4.x（Agent 所需 langchain 1.x 生态）已移除该模块。
+- 弯路：先尝试把整套 langchain 降级到 0.3.x 旧栈迁就 ragas，结果 ① 与 Agent 新栈代码冲突；② Windows 下 pip 的 safe-delete 机制在本机不可用（回收站不可达），任何「替换已存在文件」的安装都会 OSError 失败，留下 `~anggraph`、`~agas` 等残缺目录；③ 排查时误删了 `langgraph/cache` 目录——它不是垃圾，而是 langgraph-checkpoint 4.2.0 的正式模块，导致 Agent 状态图无法导入。
+- 修复：放弃降级，从官方 wheel 直接解包恢复缺失模块（`langgraph/cache` 由 langgraph-checkpoint 提供，4 个文件即修复），Agent 完整回归通过；评测改用「按 RAGAS 论文口径自实现」方案（`evals/eval_rag.py`），方法论与局限在 report_week3.md 如实披露。
+- 教训：① **评测工具不能绑架运行时**——两者共享一个 venv 时，任何一方的依赖地狱都会烧到另一方；正确做法是隔离（独立 venv）或自实现轻量口径，而不是牺牲生产环境去迁就工具；② Windows + 受限回收站环境下，pip「替换式安装」不可靠，修复破损包用「从 wheel 定向解包缺失文件」最小侵入，不搞删除重装；③ **删除任何 site-packages 里的目录前，先查它属于哪个发行版**（`grep <路径> */RECORD`），「看起来像残留」的目录可能是真实模块。
+
+**案例九：Prompt v1/v2 对比的天花板效应（如何解读「没差别」）**
+
+- 现象：精心设计的 v2 Prompt（强制逐句引用、结论先行、不足先声明）与 v1 相比三项指标差异全部 ≤ 0.03，几乎持平。
+- 定位：语料仅 900 余条、检索 context_precision 已达 0.9+，答案本质是「抄写+归纳」，两种 Prompt 都贴着天花板；评测规模 20 题也不足以分辨 0.03 的差异。
+- 决策：仍切换 v2 上线——20 题 0 编造（v1 有 1 条无支持断言），陷阱题行为更稳定，情报站「不编造 > 多说 2%」；语料扩大后复测。
+- 教训：对比实验出现「没差别」时，先判断是**真的没差别**还是**天花板/样本量**问题，结论要写成可复检的形式（差异、题数、哪个场景下会变）。
+
+**案例十：评测裁判与生成模型同源的自我偏好风险**
+
+- 现象：用 DeepSeek 既当生成模型又当裁判，faithfulness 出现 1.00 的满分——需要警惕「自己评自己偏乐观」。
+- 缓解：① 三指标中 context_precision 可独立复核（检索片段的相关性人工抽查即可验证）；② 陷阱题（#19/#20）的「声明不足而非编造」行为可人工直接读答案验证，已验证通过；③ report_week3.md 中把「裁判=生成模型」列为已知局限。
+- 教训：LLM-as-judge 的分数不是终点，要设计**至少一个不依赖裁判的独立检查点**（陷阱题、人工抽查、可计算指标）。
+
+### 成本核算（全项目，截至 Week 3）
+
+| 项 | 用量 | 估算成本 |
+|---|---|---|
+| 分类/分析链路（365 次，`llm_traces` 实测） | 输入 178,861 tok / 输出 45,967 tok | ≈ ¥1.5 |
+| RAG 评测 v2（80 次调用） | 输入 56,521 tok / 输出 14,786 tok | ≈ ¥0.5 |
+| Agent 运行 + HITL/MCP/RAG 开发测试 | 约 10 余次完整运行 | ≈ ¥0.5–1 |
+| **LLM 总成本** | — | **≈ ¥3 以内**（DeepSeek chat 官方牌价估算） |
+
+托管（GitHub Pages + Actions）与调度（cron-job.org）维持 0 成本。整个项目自始至终未使用付费服务。

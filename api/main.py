@@ -29,7 +29,7 @@ sys.path.insert(0, BASE_DIR)
 from api.schemas import (
     NewsItem, NewsListResponse, HealthResponse,
     AskRequest, AskResponse, Citation, StatsResponse,
-    TriggerResponse,
+    TriggerResponse, ReviewItem, ReviewListResponse, ReviewAction,
 )
 from api.deps import get_db
 from api.middleware import verify_api_key
@@ -49,8 +49,10 @@ app.add_middleware(
         "https://chuanyu-fangyuan.github.io",  # GitHub Pages 线上
         "http://localhost:5500",                 # Live Server
         "http://localhost:8000",                 # 本地 API
+        "http://localhost:8765",                 # 本地前端
         "http://127.0.0.1:5500",
         "http://127.0.0.1:8000",
+        "http://127.0.0.1:8765",
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST"],
@@ -348,6 +350,103 @@ async def get_insight():
         data = json.load(f)
 
     return {"available": True, **data}
+
+
+# ============================================================
+# HITL 审核（Day 17）
+# ============================================================
+
+@app.get("/reviews", response_model=ReviewListResponse)
+async def list_reviews(
+    status: str = Query("pending", description="筛选状态：pending/approved/rejected/all"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """获取待审核列表"""
+    if status == "all":
+        where = ""
+        params = []
+    else:
+        where = "WHERE status = ?"
+        params = [status]
+
+    total = db.execute(f"SELECT COUNT(*) FROM pending_review {where}", params).fetchone()[0]
+
+    rows = db.execute(
+        f"""SELECT id, news_id, review_type, original_value, suggested_value,
+                   reason, status, reviewer_note, created_at, reviewed_at
+            FROM pending_review {where}
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?""",
+        params + [limit, offset],
+    ).fetchall()
+
+    items = [dict(r) for r in rows]
+    return ReviewListResponse(total=total, items=items)
+
+
+@app.post("/review/{review_id}")
+async def process_review(
+    review_id: int,
+    action: ReviewAction,
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """处理审核（approve/reject）"""
+    if action.action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="action 必须是 approve 或 reject")
+
+    row = db.execute("SELECT * FROM pending_review WHERE id = ?", (review_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="审核记录不存在")
+
+    # 更新审核状态
+    db.execute(
+        """UPDATE pending_review
+           SET status = ?, reviewer_note = ?, reviewed_at = datetime('now')
+           WHERE id = ?""",
+        (action.action, action.note, review_id),
+    )
+
+    # 如果 approve，将建议值应用到新闻
+    if action.action == "approve" and row["suggested_value"]:
+        review_type = row["review_type"]
+        news_id = row["news_id"]
+        suggested = row["suggested_value"]
+
+        if review_type == "category":
+            db.execute("UPDATE news SET ai_category = ? WHERE id = ?", (suggested, news_id))
+        elif review_type == "summary":
+            db.execute("UPDATE news SET ai_summary_zh = ? WHERE id = ?", (suggested, news_id))
+        elif review_type == "verification":
+            db.execute("UPDATE news SET verification = ? WHERE id = ?", (suggested, news_id))
+
+    db.commit()
+
+    return {"success": True, "review_id": review_id, "action": action.action}
+
+
+@app.post("/reviews/submit")
+async def submit_review(
+    news_id: int = Query(..., description="新闻 ID"),
+    review_type: str = Query(..., description="审核类型：category/summary/verification"),
+    suggested_value: str = Query(..., description="建议值"),
+    reason: str = Query("", description="原因"),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """提交新的审核请求"""
+    row = db.execute("SELECT id, title FROM news WHERE id = ?", (news_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="新闻不存在")
+
+    cursor = db.execute(
+        """INSERT INTO pending_review (news_id, review_type, original_value, suggested_value, reason, status)
+           VALUES (?, ?, ?, ?, ?, 'pending')""",
+        (news_id, review_type, row["title"], suggested_value, reason),
+    )
+    db.commit()
+
+    return {"success": True, "review_id": cursor.lastrowid}
 
 
 # ============================================================
