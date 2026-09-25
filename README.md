@@ -113,22 +113,22 @@ schema 初始化改为 API 启动时执行 `init_sqlite`（幂等：`CREATE TABL
 
 ## 部署 API（让线上演示站也能 AI 问答）
 
-**为什么需要这一步**：站点是纯静态的（GitHub Pages），问答必须有个后端。推荐使用 **Railway.app**（支持 Docker，GitHub 登录，有免费额度）。
+**为什么需要这一步**：站点是纯静态的（GitHub Pages），问答必须有个后端。推荐使用 **Zeabur**（支持 Docker，国内访问友好，有免费额度）。
 
-**Railway.app 部署步骤**（约 5 分钟）：
+**Zeabur 部署步骤**（约 5 分钟）：
 
-1. 访问 [railway.app](https://railway.app)，用 GitHub 账号登录
-2. 点击 "New Project" → "Deploy from GitHub repo" → 选择本仓库
-3. 在 Settings → Variables 中添加：
+1. 访问 [zeabur.com](https://zeabur.com)，用 GitHub 账号登录
+2. 点击 "New Project" → 选择你的 GitHub 仓库
+3. Zeabur 会自动识别 Dockerfile，点击 "Deploy"
+4. 在 "Variables" 中添加环境变量：
    - `DEEPSEEK_API_KEY` = 你的 DeepSeek API Key
-4. 在 Settings → Generate Domain 中生成公开域名
-5. 等待自动部署完成（首次约 3-5 分钟）
+5. 等待部署完成，复制分配的域名（如 `https://xxx.zeabur.app`）
 
 **把 API 地址交给 Pages**：
 
 ```bash
 # GitHub 仓库 → Settings → Secrets and variables → Actions → Variables → New variable
-# 名称 AI_API_BASE，值 https://your-app.up.railway.app（Railway 分配的域名）
+# 名称 AI_API_BASE，值 https://xxx.zeabur.app（Zeabur 分配的域名）
 ```
 
 **为什么不用改代码**：定时工作流会读 `AI_API_BASE`，`fetch.py` 导出时把它写进 `web/config.js`；前端从该文件取地址（本地未配置则自动回落 `http://localhost:8000`）。
@@ -136,8 +136,8 @@ schema 初始化改为 API 启动时执行 `init_sqlite`（幂等：`CREATE TABL
 **部署后自检**：
 
 ```bash
-curl https://your-app.up.railway.app/health                     # 期望 {"status":"ok", ...}
-curl -s https://your-app.up.railway.app/api/stats | head -c 200 # 能看到 ask_quota 配额视图
+curl https://xxx.zeabur.app/health                     # 期望 {"status":"ok", ...}
+curl -s https://xxx.zeabur.app/api/stats | head -c 200 # 能看到 ask_quota 配额视图
 # 打开 Pages 站点 → 「AI 问答」标签 → 提问，回答下方显示「今日还可提问 N 次」
 ```
 
