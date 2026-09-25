@@ -19,17 +19,15 @@
 import argparse
 import json
 import os
-import re
 import sqlite3
 import sys
 import time
-import traceback
-from datetime import datetime, timezone, timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
-from db import SQLITE_PATH, init_sqlite, calc_cost
+from db import SQLITE_PATH, init_sqlite
+import llm
 
 # ---------------------------------------------------------------- 配置
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
@@ -143,109 +141,73 @@ def log_error(conn: sqlite3.Connection, news_id: int, error_type: str, message: 
 def log_trace(conn: sqlite3.Connection, model: str, purpose: str,
               input_tokens: int, output_tokens: int, latency_ms: int,
               cost: float, status: str, news_id: int = None):
-    conn.execute(
-        """INSERT INTO llm_traces
-           (model, purpose, input_tokens, output_tokens, latency_ms, cost_yuan, status, news_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (model, purpose, input_tokens, output_tokens, latency_ms, cost, status, news_id),
-    )
-    conn.commit()
+    """兼容旧调用：统一走 llm.record_trace，避免两处各写一份 INSERT"""
+    from llm import record_trace
+
+    record_trace(purpose, model, {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_hit_tokens": 0,
+    }, latency_ms, status, news_id, conn=conn)
 
 
 # ---------------------------------------------------------------- DeepSeek API
 
+SYSTEM_PROMPT = "你是一个专业的 AI 行业资讯分析师，只输出合法 JSON。"
+
 
 def call_deepseek(prompt: str, api_key: str) -> dict:
-    """调用 DeepSeek API，返回解析后的 JSON 结果。
+    """调用 DeepSeek 并解析 JSON，保持 analyze 内部的返回约定。
 
-    返回: {
-      "ok": True/False,
-      "result": {...},  # 成功时
-      "error_type": str,  # 失败时
-      "error_message": str,
-      "input_tokens": int,
-      "output_tokens": int,
-      "latency_ms": int,
-    }
+    网络请求、计量与 llm_traces 埋点都交给统一入口 llm.chat ——
+    此前 analyze 是唯一会埋点的链路，问答/Agent 的消耗全进了黑洞（Day 25 收口）。
     """
-    import urllib.request
-
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
-    payload = json.dumps({
-        "model": DEEPSEEK_MODEL,
-        "messages": [
-            {"role": "system", "content": "你是一个专业的 AI 行业资讯分析师，只输出合法 JSON。"},
+    out = llm.chat(
+        [
+            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
-        "response_format": {"type": "json_object"},  # 强制 JSON 输出
-        "temperature": 0.1,
-        "max_tokens": 500,
-    }).encode("utf-8")
+        purpose="analyze",
+        model=DEEPSEEK_MODEL,
+        temperature=0.1,
+        max_tokens=500,
+        json_mode=True,
+        timeout=HTTP_TIMEOUT,
+        api_key=api_key,
+    )
 
-    req = urllib.request.Request(DEEPSEEK_API_URL, data=payload, headers=headers)
-    start = time.time()
-
-    try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-        latency = int((time.time() - start) * 1000)
-
-        content = body["choices"][0]["message"]["content"]
-        usage = body.get("usage", {})
-        input_tokens = usage.get("prompt_tokens", 0)
-        output_tokens = usage.get("completion_tokens", 0)
-
-        # 解析 JSON
-        result = json.loads(content)
-        return {
-            "ok": True,
-            "result": result,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "latency_ms": latency,
-        }
-
-    except urllib.error.HTTPError as e:
-        latency = int((time.time() - start) * 1000)
-        body = ""
-        try:
-            body = e.read().decode("utf-8", errors="replace")[:200]
-        except Exception:
-            pass
+    if not out["ok"]:
         return {
             "ok": False,
-            "error_type": "api_error",
-            "error_message": f"HTTP {e.code}: {body}",
+            "error_type": out["error_type"],
+            "error_message": out["error_message"],
             "input_tokens": 0,
             "output_tokens": 0,
-            "latency_ms": latency,
+            "latency_ms": out.get("latency_ms", 0),
+            "cost_yuan": 0.0,
         }
 
-    except json.JSONDecodeError as e:
-        latency = int((time.time() - start) * 1000)
+    try:
+        result = json.loads(out["content"])
+    except json.JSONDecodeError as exc:
         return {
             "ok": False,
             "error_type": "json_parse",
-            "error_message": f"LLM 返回非 JSON: {str(e)[:100]}",
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "latency_ms": latency,
+            "error_message": f"LLM 返回非 JSON: {str(exc)[:100]}",
+            "input_tokens": out["usage"]["input_tokens"],
+            "output_tokens": out["usage"]["output_tokens"],
+            "latency_ms": out["latency_ms"],
+            "cost_yuan": out["cost_yuan"],
         }
 
-    except Exception as e:
-        latency = int((time.time() - start) * 1000)
-        error_type = "timeout" if "timeout" in str(e).lower() else "unknown"
-        return {
-            "ok": False,
-            "error_type": error_type,
-            "error_message": str(e)[:200],
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "latency_ms": latency,
-        }
+    return {
+        "ok": True,
+        "result": result,
+        "input_tokens": out["usage"]["input_tokens"],
+        "output_tokens": out["usage"]["output_tokens"],
+        "latency_ms": out["latency_ms"],
+        "cost_yuan": out["cost_yuan"],
+    }
 
 
 def validate_result(result: dict) -> dict:
@@ -293,9 +255,11 @@ def analyze_one(news_item: dict, api_key: str) -> dict:
     )
 
     last_result = None
+    attempt_cost = 0.0  # 重试也要计费：把所有尝试的成本累加，别只算成功那次
     for attempt in range(MAX_RETRIES):
         result = call_deepseek(prompt, api_key)
         last_result = result
+        attempt_cost += result.get("cost_yuan", 0.0)
 
         if result["ok"]:
             validated = validate_result(result["result"])
@@ -305,6 +269,7 @@ def analyze_one(news_item: dict, api_key: str) -> dict:
                 "input_tokens": result["input_tokens"],
                 "output_tokens": result["output_tokens"],
                 "latency_ms": result["latency_ms"],
+                "cost_yuan": attempt_cost,
                 "retries": attempt,
             }
 
@@ -324,6 +289,7 @@ def analyze_one(news_item: dict, api_key: str) -> dict:
         "input_tokens": last_result.get("input_tokens", 0),
         "output_tokens": last_result.get("output_tokens", 0),
         "latency_ms": last_result.get("latency_ms", 0),
+        "cost_yuan": attempt_cost,
         "retries": MAX_RETRIES - 1,
     }
 
@@ -381,24 +347,17 @@ def run_analysis(limit: int = 0, dry_run: bool = False):
         if result["success"]:
             mark_done(conn, news_id, result["result"])
             success_count += 1
-            status = "ok"
             print(f"  [{i+1}/{len(candidates)}] ✓ #{news_id} {title_short}")
         else:
             mark_error(conn, news_id)
             log_error(conn, news_id, result["error_type"], result["error_message"], result["retries"])
             error_count += 1
-            status = "error"
             print(f"  [{i+1}/{len(candidates)}] ✗ #{news_id} {title_short} → {result['error_type']}")
 
-        # 记录 trace
+        # trace 已由 llm.chat 统一落库（含失败），这里只累计用于本次运行汇总
         inp_tok = result.get("input_tokens", 0)
         out_tok = result.get("output_tokens", 0)
-        cost = calc_cost(inp_tok, out_tok)
-        log_trace(
-            conn, DEEPSEEK_MODEL, "analyze",
-            inp_tok, out_tok, result.get("latency_ms", 0),
-            cost, status, news_id,
-        )
+        cost = result.get("cost_yuan", 0.0)
         total_input_tokens += inp_tok
         total_output_tokens += out_tok
         total_cost += cost
@@ -409,7 +368,7 @@ def run_analysis(limit: int = 0, dry_run: bool = False):
             time.sleep(THROTTLE_DELAY)
 
     # 汇总
-    print(f"\n[done] 分析完成:")
+    print("\n[done] 分析完成:")
     print(f"  成功: {success_count}")
     print(f"  失败: {error_count}")
     print(f"  总 token: 输入 {total_input_tokens} + 输出 {total_output_tokens}")

@@ -1,0 +1,27 @@
+# 覆盖率配置
+#
+# 统计范围只算「产品代码」，不含测试与评测脚手架 —— 否则覆盖率会因为
+# 把测试文件本身算进分母而被稀释，数字好看但没有意义。
+#
+# 逐项说明：
+#   tests/、evals/     —— 用例与评测脚本，本身不是被测对象
+#   import_baseline.py —— 一次性历史数据导入脚本，只在接入项目时跑过一遍
+#   */__pycache__/*    —— 编译缓存
+
+[run]
+source = .
+omit =
+    tests/*
+    evals/*
+    import_baseline.py
+    */__pycache__/*
+
+[report]
+# 项目用异步函数 + 防御性 except 分支，允许显式标注排除
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    raise NotImplementedError
+
+show_missing = True
+skip_covered = False

@@ -26,6 +26,10 @@ jobs:
   update:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # 前端要调的 API 地址（仓库 Settings → Variables 配置，如 https://xxx.fly.dev）。
+      # 未配置时 fetch.py 写空值、前端回落 localhost，本地开发不受影响。
+      AI_API_BASE: ${{ vars.AI_API_BASE }}
     steps:
       - uses: actions/checkout@v4
 
@@ -51,7 +55,9 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
             python fetch.py
-            git add data/news.db web/data.json
+            # 导出产物都要提交：data.json（前端数据）、stats.json（成本看板）、
+            # config.js（线上 API 地址）—— 漏一个就会出现「页脚没数字 / 问答连不上」
+            git add data/news.db web/data.json web/stats.json web/config.js
             if git diff --cached --quiet; then
               echo "本次无新增数据，无需提交"
               exit 0
@@ -83,6 +89,7 @@ jobs:
     timeout-minutes: 30
     env:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      AI_API_BASE: ${{ vars.AI_API_BASE }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -109,7 +116,7 @@ jobs:
           # 重新运行分析（以防 update 和 analyze 之间 main 被更新）
           python analyze.py
           python fetch.py --export-only
-          git add data/news.db web/data.json
+          git add data/news.db web/data.json web/stats.json web/config.js
           if git diff --cached --quiet; then
             echo "本次无新增分析结果"
             exit 0
@@ -117,8 +124,58 @@ jobs:
           git commit -m "ai: 分析更新 ${{ github.run_id }}"
           git push origin HEAD:main || echo "::warning::分析结果推送失败（可能被并发更新覆盖）"
 
-  deploy:
+  # ============================================================
+  # 质量门禁（Week 4）：单测覆盖率 + lint + 评测回归
+  #
+  # 成本控制：RAG 评测要跑 80 次 LLM 调用（约 ¥0.5-1），
+  # 本工作流每 3 小时被 cron-job.org 触发一次，若每次都跑满，
+  # 一天就是 ¥4-8、一个月上百元 —— 而这笔钱大部分花在「数据没变、代码也没变」的轮次上。
+  # 因此按触发来源分流：
+  #   push（代码变更）      → 跑完整评测，含 LLM 指标
+  #   workflow_dispatch（定时数据更新）→ 只跑零成本的检索/分类评测
+  # 两条路径都过同一份规则（evals/baseline.json），门禁强度只在「代码变更」时拉满。
+  # ============================================================
+  evals:
     needs: analyze
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      HF_ENDPOINT: https://hf-mirror.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-cov ruff
+
+      - name: 运行单元测试（覆盖率熔断线 50%）
+        run: |
+          pytest tests/ --cov=. --cov-report=term-missing --cov-fail-under=50
+
+      - name: 运行 Lint 检查
+        # 规则集见仓库根目录 ruff.toml（含 E402 等逐条写明理由的忽略项）
+        run: ruff check .
+
+      - name: 运行评测回归门禁
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "代码变更触发 → 跑完整评测（含 LLM 指标）"
+            python evals/run_all.py --gate-config evals/baseline.json --json
+          else
+            echo "定时数据更新 → 跳过 LLM 评测（省成本），仅跑检索/分类"
+            python evals/run_all.py --gate-config evals/baseline.json --skip-llm --json
+          fi
+
+  deploy:
+    needs: evals
     runs-on: ubuntu-latest
     environment:
       name: github-pages

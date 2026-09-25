@@ -11,6 +11,7 @@
 
 import os
 import sqlite3
+from datetime import datetime, timezone
 from typing import Optional
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -167,14 +168,70 @@ def init_sqlite(conn: sqlite3.Connection):
 
 # ============================================================
 # DeepSeek 定价（用于成本追踪）
+#
+# 口径来源：官方价目表 https://api-docs.deepseek.com/quick_start/pricing
+# （2026-09-23 核对）。注意此前这里的量纲是错的：常量写的是「元/千 token」，
+# 计算时却除以 1_000_000，等于把成本少算了 1000 倍 —— 365 次调用的累计费用
+# 被记成 ¥0.0003，与真实账单差了几个数量级。
+#
+# 现在改成按官方表格的三档价格 + 峰谷区分（官方单位是 USD/百万 token）：
+#   输入（缓存未命中）  峰值 $0.30 / 非峰值 $0.15
+#   输入（缓存命中）    峰值 $0.006 / 非峰值 $0.003
+#   输出                峰值 $1.20 / 非峰值 $0.60
+# 峰值时段：UTC 周一至周五 01:00-04:00、06:00-10:00；其余时间（含周末与法定节假日）非峰值。
+#
+# 声明：官方保留调价权，汇率也会浮动，这里的数字只能用于「估算」，
+# 真实对账请以 DeepSeek 账户账单为准。
 # ============================================================
-DEEPSEEK_PRICING = {
-    "input_per_mtok": 0.001,    # ¥0.001/千 token（缓存命中价）
-    "output_per_mtok": 0.002,   # ¥0.002/千 token
+DEEPSEEK_PRICING_USD = {
+    "input_cache_miss": {"peak": 0.30, "offpeak": 0.15},
+    "input_cache_hit": {"peak": 0.006, "offpeak": 0.003},
+    "output": {"peak": 1.20, "offpeak": 0.60},
 }
 
+USD_CNY = 7.1  # 折算汇率（估算值，仅用于把官方美元价换算成人民币展示）
 
-def calc_cost(input_tokens: int, output_tokens: int) -> float:
-    """计算 DeepSeek 调用成本（元）"""
-    return (input_tokens / 1_000_000) * DEEPSEEK_PRICING["input_per_mtok"] + \
-           (output_tokens / 1_000_000) * DEEPSEEK_PRICING["output_per_mtok"]
+PEAK_HOURS_UTC = ((1, 4), (6, 10))  # 官方峰值时段（UTC，周一至周五）
+
+
+def is_peak_time(dt: Optional[datetime] = None) -> bool:
+    """当前是否处于官方峰值计费时段（决定用 peak 还是 offpeak 单价）"""
+    dt = dt or datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    dt = dt.astimezone(timezone.utc)
+    if dt.weekday() >= 5:  # 周末整段非峰值
+        return False
+    return any(start <= dt.hour < end for start, end in PEAK_HOURS_UTC)
+
+
+def estimate_cost_usd(
+    input_tokens: int,
+    output_tokens: int,
+    cache_hit_tokens: int = 0,
+    peak: Optional[bool] = None,
+) -> float:
+    """按官方价目估算费用（美元）。
+
+    cache_hit_tokens：命中最便宜的缓存档的那部分输入；其余输入按缓存未命中计。
+    不传 peak 时自动按当前时间判断峰谷。
+    """
+    tier = "peak" if (is_peak_time() if peak is None else peak) else "offpeak"
+    hit = max(0, min(cache_hit_tokens, input_tokens))
+    miss = max(0, input_tokens - hit)
+
+    return (
+        miss / 1_000_000 * DEEPSEEK_PRICING_USD["input_cache_miss"][tier]
+        + hit / 1_000_000 * DEEPSEEK_PRICING_USD["input_cache_hit"][tier]
+        + output_tokens / 1_000_000 * DEEPSEEK_PRICING_USD["output"][tier]
+    )
+
+
+def calc_cost(
+    input_tokens: int,
+    output_tokens: int,
+    cache_hit_tokens: int = 0,
+    peak: Optional[bool] = None,
+) -> float:
+    """计算 DeepSeek 调用成本（人民币，估算）"""
+    return estimate_cost_usd(input_tokens, output_tokens, cache_hit_tokens, peak) * USD_CNY

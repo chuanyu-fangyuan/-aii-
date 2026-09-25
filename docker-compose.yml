@@ -1,0 +1,39 @@
+# ============================================================
+# AI 情报站 · 一键启动（API + 数据卷）
+#
+#   docker compose up --build
+#   → http://localhost:8000/docs     接口文档
+#   → http://localhost:8000/health   健康检查
+#
+# 为什么只有 api 一个服务（没有 postgres / migrate）：
+#   ① 检索是「本地小模型嵌入 + SQLite BLOB 向量」（见 retrieval.py），
+#      单写者、当前 1.9MB 级数据量，引入 pgvector 只增加容器的维护面而没有收益；
+#      db.py 里的 PostgreSQL 分支（DATABASE_URL）保留但未启用 —— 如实标注，不假装支持。
+#   ② 没有独立 migrate 容器：schema 初始化是幂等的（db.init_sqlite 用
+#      CREATE TABLE IF NOT EXISTS + 按列增量 ALTER），API 启动时自动执行，
+#      单独一个一次性容器反而多一条要维护的启动顺序。
+# ============================================================
+
+services:
+  api:
+    build:
+      context: .
+      args:
+        # Docker Hub 直连受限时改走镜像源（daocloud / 1panel 实测可用）
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+        # 网络受限（无法访问 download.pytorch.org）时改成空串，退回 PyPI 官方源
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+    image: ai-daily-brief-api:local
+    container_name: ai-daily-brief-api
+    ports:
+      - "8000:8000"
+    environment:
+      # 从宿主机 .env 或 shell 环境注入；两者都没有时留空，
+      # AI 问答端点会明确报「未配置 DEEPSEEK_API_KEY」，而不是静默给假答案
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+    volumes:
+      # 把 SQLite 库挂载出来：Actions / 本地 fetch.py 更新完数据后，
+      # 容器不用重建就能读到新内容（数据不进镜像层，也就不进 git 之外的副本）
+      - ./data:/app/data
+    restart: unless-stopped

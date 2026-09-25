@@ -4,13 +4,11 @@ BM25 + 向量检索 + RRF 融合 + 时间衰减。
 接口：search(query, top_k=5) → List[SearchResult]
 """
 
-import json
 import math
 import os
 import re
 import sqlite3
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -133,7 +131,6 @@ def search(query: str, top_k: int = 5, vector_factor: int = 3) -> List[SearchRes
         return []
 
     row_by_idx = {i: r for i, r in enumerate(rows)}
-    row_by_id = {r["id"]: r for r in rows}
 
     all_embs = np.array(
         [np.frombuffer(r["embedding"], dtype=np.float32) for r in rows],

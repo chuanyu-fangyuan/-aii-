@@ -10,7 +10,6 @@
 import argparse
 import os
 import sqlite3
-import sys
 import time
 
 import numpy as np

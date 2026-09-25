@@ -21,7 +21,6 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 
 try:
@@ -463,7 +462,7 @@ def build_graph(rows: list, strengths: dict) -> tuple:
         n["strength"] = round(n["strength"], 4)
 
     nodes = [n for n in nodes if n["type"] == "news" or n["id"] in keep_ids]
-    links = [l for l in links if l["target"] in keep_ids]
+    links = [lk for lk in links if lk["target"] in keep_ids]
     stats = {
         "keywords_total": len(kw_nodes),
         "keywords_forgotten": len(kw_nodes) - len(kept),
@@ -482,14 +481,17 @@ def build_digest(rows: list, graph: dict) -> dict:
     today = datetime.now(SHANGHAI).date().isoformat()
     kw_label = {n["id"]: n["label"] for n in graph["nodes"] if n["type"] == "keyword"}
     news_kw = {}  # "n<id>" -> [keyword label]
-    for l in graph["links"]:
-        nid, kid = l["source"], l["target"]
+    for lk in graph["links"]:
+        nid, kid = lk["source"], lk["target"]
         if kid in kw_label:
             news_kw.setdefault(nid, []).append(kw_label[kid])
 
     todays = []
     for r in rows:
         t = r["published_at"] or r["fetched_at"]
+        # Python 3.10 及以下版本不支持 'Z' 后缀，需替换为 '+00:00'
+        if t.endswith("Z"):
+            t = t[:-1] + "+00:00"
         d = datetime.fromisoformat(t).astimezone(SHANGHAI).date().isoformat()
         if d == today:
             todays.append(r)
@@ -631,6 +633,10 @@ def export_json(conn: sqlite3.Connection, pruned: int = 0):
     os.makedirs(os.path.dirname(EXPORT_PATH), exist_ok=True)
     with open(EXPORT_PATH, "w", encoding="utf-8") as f:
         json.dump({"meta": meta, "news": rows, "graph": graph, "digest": digest}, f, ensure_ascii=False)
+
+    export_cost_stats(conn)
+    export_frontend_config()
+
     print(
         f"[export] 展示 {len(rows)} 条（库内归档 {total_db} 条）, "
         f"图谱 {len(graph['nodes'])} 节点 / {len(graph['links'])} 边 "
@@ -642,6 +648,55 @@ def export_json(conn: sqlite3.Connection, pruned: int = 0):
 
 
 # ---------------------------------------------------------------- 主流程
+
+
+def export_frontend_config():
+    """导出 web/config.js：给静态站注入线上 API 地址。
+
+    为什么需要：站点在 GitHub Pages（纯静态）上跑，AI 问答要调部署在别处的 API。
+    地址既不能硬编码进 index.html（本地与线上不是同一个地址），也不该每次部署手改代码。
+    做法是把地址放进环境变量 AI_API_BASE，构建时写进 config.js：
+      · 本地/未配置 → 留空，前端回落 http://localhost:8000（本地开发照常可用）；
+      · CI → 读仓库变量 AI_API_BASE（Fly.io 地址），部署后演示站直接具备问答能力。
+    """
+    api_base = os.environ.get("AI_API_BASE", "").strip().rstrip("/")
+    config_path = os.path.join(BASE_DIR, "web", "config.js")
+    content = (
+        "/* 由 fetch.py 生成：线上 API 地址。\n"
+        " * 本地留空 → 前端回落 http://localhost:8000；\n"
+        " * CI 部署时从仓库变量 AI_API_BASE 注入（见 README「部署到 Fly.io」）。*/\n"
+        f'window.AI_API_BASE = "{api_base}";\n'
+    )
+    with open(config_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    print(f"[export] 前端 API 地址: {api_base or '(未配置，回落 localhost:8000)'} -> {config_path}")
+
+
+def export_cost_stats(conn: sqlite3.Connection):
+    """导出 web/stats.json（成本看板）。
+
+    为什么导出成静态文件而不是让前端调 /api/stats：
+      线上是纯静态站（GitHub Pages），根本没有 API 可调，
+      访客看到的「本站烧了多少钱」只能来自构建期算好的快照。
+    """
+    from llm import stats as llm_stats
+
+    try:
+        data = llm_stats(conn=conn)
+    except sqlite3.OperationalError:
+        # 老库没有 llm_traces 表：跳过而不是让整次导出失败
+        print("[export] 跳过成本看板（llm_traces 表不存在）")
+        return
+
+    data["generated_at"] = datetime.now(timezone.utc).isoformat()
+    stats_path = os.path.join(BASE_DIR, "web", "stats.json")
+    with open(stats_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print(
+        f"[export] 成本看板：{data['calls']} 次调用 / "
+        f"{data['input_tokens'] + data['output_tokens']} tokens / "
+        f"≈¥{data['cost_yuan']:.4f} -> {stats_path}"
+    )
 
 
 def run(sources, only=None):

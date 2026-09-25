@@ -1,9 +1,8 @@
 """API Key 鉴权中间件"""
 
 import os
-from fastapi import Request, HTTPException
+from fastapi import HTTPException, Security
 from fastapi.security import APIKeyHeader
-from fastapi import Security
 
 # 不需要鉴权的端点
 PUBLIC_PATHS = {"/health", "/docs", "/openapi.json", "/redoc"}

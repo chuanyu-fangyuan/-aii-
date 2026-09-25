@@ -1,0 +1,32 @@
+# 构建上下文瘦身：这些东西镜像里都不需要
+# （容器只跑 API，读 data/news.db；web/ 由 Pages 托管，测试/评测在 CI 跑）
+
+# 版本控制与 CI
+.git
+.gitignore
+.github
+
+# 本地虚拟环境与缓存
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# 密钥：绝不进镜像层
+.env
+.env.*
+
+# 前端静态站（Pages 部署，容器不提供）
+web
+
+# 测试与评测（CI 里跑，镜像不含用例与数据集）
+tests
+evals
+
+# 截图等临时产物
+shot-*.png
+screenshot-*.png

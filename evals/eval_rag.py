@@ -27,35 +27,40 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
-import requests  # noqa: E402
-
+import llm as llm_mod  # noqa: E402
 from retrieval import search  # noqa: E402
 
 API_URL = "https://api.deepseek.com/chat/completions"
 QA_PATH = os.path.join(BASE_DIR, "evals", "rag_qa.jsonl")
 RESULTS_PATH = os.path.join(BASE_DIR, "evals", "rag_eval_results.jsonl")
-COST_LOG = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
+COST_LOG = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_yuan": 0.0}
 
 
 def llm(prompt: str, temperature: float = 0.2, max_tokens: int = 900) -> str:
-    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    """调用 LLM。
+
+    走统一入口 llm.chat：评测的开销同样要进 llm_traces（purpose='eval'），
+    否则成本看板里「评测」这一块永远是零 —— 而它恰恰是最费钱的链路之一。
+    """
+    api_key = llm_mod.get_api_key()
     assert api_key, "DEEPSEEK_API_KEY 未配置"
-    resp = requests.post(
-        API_URL,
-        headers={"Authorization": f"Bearer {api_key}",
-                 "Content-Type": "application/json"},
-        json={"model": "deepseek-chat",
-              "messages": [{"role": "user", "content": prompt}],
-              "temperature": temperature, "max_tokens": max_tokens},
+
+    out = llm_mod.chat(
+        [{"role": "user", "content": prompt}],
+        purpose="eval",
+        temperature=temperature,
+        max_tokens=max_tokens,
         timeout=60,
+        api_key=api_key,
     )
-    resp.raise_for_status()
-    data = resp.json()
-    usage = data.get("usage", {})
+    if not out["ok"]:
+        raise RuntimeError(f"LLM 调用失败: {out['error_message']}")
+
     COST_LOG["calls"] += 1
-    COST_LOG["prompt_tokens"] += usage.get("prompt_tokens", 0)
-    COST_LOG["completion_tokens"] += usage.get("completion_tokens", 0)
-    return data["choices"][0]["message"]["content"]
+    COST_LOG["prompt_tokens"] += out["usage"]["input_tokens"]
+    COST_LOG["completion_tokens"] += out["usage"]["output_tokens"]
+    COST_LOG["cost_yuan"] = round(COST_LOG["cost_yuan"] + out["cost_yuan"], 6)
+    return out["content"]
 
 
 def build_context(results) -> str:
@@ -149,7 +154,7 @@ def evaluate_answer(query, ground_truth, context, answer, top_k):
 # ------------------------------------------------ 主流程
 
 def run(prompt_versions, limit):
-    qas = [json.loads(l) for l in open(QA_PATH, encoding="utf-8") if l.strip()][:limit]
+    qas = [json.loads(line) for line in open(QA_PATH, encoding="utf-8") if line.strip()][:limit]
     all_rows = []
     for pv in prompt_versions:
         print(f"\n===== Prompt {pv} × {len(qas)} 题 =====")
@@ -188,6 +193,13 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=20)
     ap.add_argument("--prompt", default="both", help="v1 | v2 | both")
+    ap.add_argument("--json", action="store_true", help="输出 JSON 格式")
     args = ap.parse_args()
     versions = ["v1", "v2"] if args.prompt == "both" else [args.prompt]
-    run(versions, args.limit)
+    summary = run(versions, args.limit)
+
+    if args.json:
+        # 输出最后一个版本的指标（用于回归门禁）
+        if summary:
+            last_version = list(summary.keys())[-1]
+            print(json.dumps(summary[last_version], ensure_ascii=False, indent=2))

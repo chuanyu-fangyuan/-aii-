@@ -17,9 +17,10 @@ import json
 import os
 import sqlite3
 import sys
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 # 确保项目根目录在 sys.path
@@ -29,10 +30,33 @@ sys.path.insert(0, BASE_DIR)
 from api.schemas import (
     NewsItem, NewsListResponse, HealthResponse,
     AskRequest, AskResponse, Citation, StatsResponse,
-    TriggerResponse, ReviewItem, ReviewListResponse, ReviewAction,
+    TriggerResponse, ReviewListResponse, ReviewAction,
 )
 from api.deps import get_db
 from api.middleware import verify_api_key
+import llm
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """启动时确保 schema 就绪。
+
+    容器/全新克隆场景下 data/news.db 可能不存在，若等第一个请求才建表，
+    /health 会先报一次错误、健康检查也就失败一次。
+    init_sqlite 是幂等的（CREATE TABLE IF NOT EXISTS + 按缺失列 ALTER），
+    所以这里放心无条件执行，也替代了单独的 migrate 容器。
+    """
+    from db import SQLITE_PATH, init_sqlite
+
+    os.makedirs(os.path.dirname(SQLITE_PATH), exist_ok=True)
+    conn = sqlite3.connect(SQLITE_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        init_sqlite(conn)
+    finally:
+        conn.close()
+    yield
+
 
 app = FastAPI(
     title="AI 情报站 API",
@@ -40,20 +64,28 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # CORS 配置（Day 5 关键：允许前端跨域访问）
+#
+# 跨域校验的是「调用方页面」的来源，不是 API 自己的地址 ——
+# 所以演示站部署到 Pages 后，只要这里是 github.io 就能通；
+# 换成自定义域名/其它托管时，用 ALLOWED_ORIGINS 环境变量追加，不必改代码。
+_DEFAULT_ORIGINS = [
+    "https://chuanyu-fangyuan.github.io",  # GitHub Pages 线上
+    "http://localhost:5500",                 # Live Server
+    "http://localhost:8000",                 # 本地 API
+    "http://localhost:8765",                 # 本地前端
+    "http://127.0.0.1:5500",
+    "http://127.0.0.1:8000",
+    "http://127.0.0.1:8765",
+]
+_EXTRA_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://chuanyu-fangyuan.github.io",  # GitHub Pages 线上
-        "http://localhost:5500",                 # Live Server
-        "http://localhost:8000",                 # 本地 API
-        "http://localhost:8765",                 # 本地前端
-        "http://127.0.0.1:5500",
-        "http://127.0.0.1:8000",
-        "http://127.0.0.1:8765",
-    ],
+    allow_origins=_DEFAULT_ORIGINS + _EXTRA_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
@@ -74,6 +106,8 @@ async def health(db: sqlite3.Connection = Depends(get_db)):
             news_count=count,
         )
     except Exception as e:
+        # 降级原因打到 stderr：/health 只回状态码，排障时需要知道为什么降级
+        print(f"[health] 数据库不可用: {e}", file=sys.stderr)
         return HealthResponse(
             status="degraded",
             database="sqlite",
@@ -196,7 +230,11 @@ async def trigger_analysis(
 # RAG 问答（Day 10）
 # ============================================================
 
-RAG_PROMPT_PATH = os.path.join(BASE_DIR, "prompts", "rag_v1.txt")
+# RAG 提示词与模型：与评测口径保持一致。
+# 注意这里必须是 v2 —— Week 3 的对比实验结论是「线上切 v2」（faithfulness 更稳、0 编造），
+# 但此前这里仍指向 v1，导致「门禁评 v2、线上跑 v1」，报告的「评测口径与生产一致」并不成立。
+RAG_PROMPT_PATH = os.path.join(BASE_DIR, "prompts", "rag_v2.txt")
+RAG_MODEL = llm.DEFAULT_MODEL
 RAG_TIMEOUT = 25
 
 
@@ -215,8 +253,12 @@ def _build_context(results):
 
 
 def _verify_citations(answer: str, results):
+    """从答案里的 [n] 标记反查引用到的新闻 ID。
+
+    只认落在检索结果范围内的编号，越界编号直接忽略（防止模型编造引用序号）。
+    """
     import re
-    valid_ids = {r.news_id for r in results}
+
     cited_ids = set()
     for m in re.finditer(r"\[(\d+)\]", answer):
         idx = int(m.group(1)) - 1
@@ -226,20 +268,32 @@ def _verify_citations(answer: str, results):
 
 
 @app.post("/ask", response_model=AskResponse)
-async def ask(request: AskRequest):
-    from retrieval import search
-    import requests as http_requests
+def ask(payload: AskRequest, http_request: Request):
+    """AI 问答（公开端点，带每日配额）。
 
-    results = search(request.query, top_k=request.top_k)
+    两点设计说明：
+      ① 声明成同步 def 而不是 async def：检索（本地模型推理）与 LLM 调用都是
+         阻塞操作，写在 async 里会卡住整个事件循环 —— 一个访客提问 20 秒，
+         其他人连 /health 都请求不到。同步函数由 FastAPI 丢进线程池，互不阻塞。
+      ② 配额在检索之前判定：额度用尽时不做任何计算、不碰 LLM。
+    """
+    from api.ratelimit import enforce
+    from retrieval import search
+
+    quota = enforce(http_request)
+    remaining = quota["remaining"]
+
+    results = search(payload.query, top_k=payload.top_k)
     if not results:
         return AskResponse(
             answer="未找到相关资料，请尝试其他关键词。",
             citations=[],
+            remaining_quota=remaining,
         )
 
     context = _build_context(results)
     template = _load_rag_prompt()
-    prompt = template.replace("{context}", context).replace("{query}", request.query)
+    prompt = template.replace("{context}", context).replace("{query}", payload.query)
 
     api_key = os.environ.get("DEEPSEEK_API_KEY", "")
     if not api_key:
@@ -251,31 +305,26 @@ async def ask(request: AskRequest):
         return AskResponse(
             answer="API Key 未配置，无法调用 AI 服务。",
             citations=[Citation(news_id=r.news_id, title=r.title, link=r.url) for r in results[:3]],
+            remaining_quota=remaining,
         )
 
-    try:
-        resp = http_requests.post(
-            "https://api.deepseek.com/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "deepseek-chat",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-                "max_tokens": 800,
-            },
-            timeout=RAG_TIMEOUT,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        answer = data["choices"][0]["message"]["content"]
-    except Exception as e:
+    # 统一走 llm.chat：请求、超时、计量、trace 一套逻辑（Day 25 收口）
+    out = llm.chat(
+        [{"role": "user", "content": prompt}],
+        purpose="ask",
+        model=RAG_MODEL,
+        temperature=0.3,
+        max_tokens=800,
+        timeout=RAG_TIMEOUT,
+        api_key=api_key,
+    )
+    if not out["ok"]:
         return AskResponse(
-            answer=f"AI 服务调用失败: {e}",
+            answer=f"AI 服务调用失败: {out['error_message']}",
             citations=[Citation(news_id=r.news_id, title=r.title, link=r.url) for r in results[:3]],
+            remaining_quota=remaining,
         )
+    answer = out["content"]
 
     cited_ids = _verify_citations(answer, results)
     citations = [
@@ -290,7 +339,7 @@ async def ask(request: AskRequest):
             for r in results[:3]
         ]
 
-    return AskResponse(answer=answer, citations=citations)
+    return AskResponse(answer=answer, citations=citations, remaining_quota=remaining)
 
 
 # ============================================================
@@ -298,40 +347,51 @@ async def ask(request: AskRequest):
 # ============================================================
 
 @app.get("/api/stats", response_model=StatsResponse)
-async def stats(db: sqlite3.Connection = Depends(get_db)):
+async def stats(days: int = Query(0, ge=0, le=365), db: sqlite3.Connection = Depends(get_db)):
+    """库内规模 + LLM 成本看板。
+
+    days=0 表示全量；days=N 只看最近 N 天。成本按官方价目表估算
+    （含峰谷与缓存命中价，口径见 db.py 与 llm.py），真实对账以账户账单为准。
+    """
     total_news = db.execute("SELECT COUNT(*) FROM news").fetchone()[0]
     ai_analyzed = db.execute(
         "SELECT COUNT(*) FROM news WHERE ai_status = 'done'"
     ).fetchone()[0]
 
-    # LLM 调用统计
     try:
-        trace_row = db.execute(
-            """SELECT COUNT(*) as cnt,
-                      COALESCE(SUM(input_tokens), 0) as inp,
-                      COALESCE(SUM(output_tokens), 0) as outp,
-                      COALESCE(SUM(cost_yuan), 0) as cost
-               FROM llm_traces"""
-        ).fetchone()
-        total_traces = trace_row[0]
-        total_input = trace_row[1]
-        total_output = trace_row[2]
-        total_cost = trace_row[3]
+        summary = llm.stats(days=days or None, conn=db)
     except sqlite3.OperationalError:
-        # llm_traces 表可能还没建
-        total_traces = 0
-        total_input = 0
-        total_output = 0
-        total_cost = 0.0
+        # llm_traces 表可能还没建（旧库/首次启动）
+        summary = {
+            "calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_yuan": 0.0,
+            "error_calls": 0, "avg_cost_per_call_yuan": 0.0, "by_purpose": [], "daily": [],
+        }
 
     return StatsResponse(
         total_news=total_news,
         ai_analyzed=ai_analyzed,
-        total_traces=total_traces,
-        total_cost_yuan=round(total_cost, 6),
-        total_input_tokens=total_input,
-        total_output_tokens=total_output,
+        total_traces=summary["calls"],
+        total_cost_yuan=round(summary["cost_yuan"], 6),
+        total_input_tokens=summary["input_tokens"],
+        total_output_tokens=summary["output_tokens"],
+        error_traces=summary.get("error_calls", 0),
+        avg_cost_per_call_yuan=summary.get("avg_cost_per_call_yuan", 0.0),
+        window_days=days,
+        by_purpose=summary.get("by_purpose", []),
+        daily=summary.get("daily", []),
+        cost_note=summary.get("unit_note", ""),
+        ask_quota=_quota_snapshot(db),
     )
+
+
+def _quota_snapshot(db: sqlite3.Connection) -> dict:
+    """公开配额使用情况（不含任何 IP 信息）"""
+    from api.ratelimit import get_quota
+
+    snap = get_quota().snapshot()
+    snap.pop("ip_used", None)
+    snap.pop("ip_remaining", None)
+    return snap
 
 
 # ============================================================

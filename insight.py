@@ -6,9 +6,7 @@
 
 import json
 import os
-import re
 import sqlite3
-import sys
 from datetime import datetime, timezone, timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -41,14 +39,16 @@ def get_today_news(conn, days: int = 1):
 def build_news_digest(news):
     parts = []
     for i, n in enumerate(news, 1):
-        cat = f"[{n['ai_category']}]" if n.get("ai_category") else ""
+        # 无分类时不留下多余空格（原写法在无分类行会拼出 "2.  标题" 两个空格）
+        cat = f"[{n['ai_category']}] " if n.get("ai_category") else ""
         summary = n.get("ai_summary_zh") or n["title"]
-        parts.append(f"{i}. {cat} {summary[:100]}")
+        parts.append(f"{i}. {cat}{summary[:100]}")
     return "\n".join(parts)
 
 
 def generate_insight(api_key: str, news: list) -> dict:
-    import requests
+    """生成今日洞察。请求与计量都交给统一入口 llm.chat（purpose='insight'）"""
+    from llm import chat
 
     digest = build_news_digest(news)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -58,24 +58,18 @@ def generate_insight(api_key: str, news: list) -> dict:
 
     prompt = template.replace("{date}", today).replace("{news_digest}", digest)
 
-    resp = requests.post(
-        "https://api.deepseek.com/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": "deepseek-chat",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.5,
-            "max_tokens": 1000,
-            "response_format": {"type": "json_object"},
-        },
+    out = chat(
+        [{"role": "user", "content": prompt}],
+        purpose="insight",
+        temperature=0.5,
+        max_tokens=1000,
+        json_mode=True,
         timeout=60,
+        api_key=api_key,
     )
-    resp.raise_for_status()
-    content = resp.json()["choices"][0]["message"]["content"]
-    return json.loads(content)
+    if not out["ok"]:
+        raise RuntimeError(f"洞察生成失败: {out['error_message']}")
+    return json.loads(out["content"])
 
 
 def save_insight(data: dict):

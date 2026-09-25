@@ -171,8 +171,6 @@ def verify_claim(claim: str, news_ids: Optional[List[int]] = None) -> str:
     Returns:
         JSON 格式，包含验证结果、置信度和依据
     """
-    import requests
-
     # 获取参考新闻
     context_parts = []
     if news_ids:
@@ -215,34 +213,25 @@ def verify_claim(claim: str, news_ids: Optional[List[int]] = None) -> str:
   "sources": ["相关来源说明"]
 }}"""
 
+    # 走统一入口：Agent 的每次核查也要计入成本（purpose='agent_verify'）
+    from llm import chat
+
+    out = chat(
+        [{"role": "user", "content": prompt}],
+        purpose="agent_verify",
+        temperature=0.1,
+        max_tokens=500,
+        timeout=30,
+        api_key=api_key,
+    )
+    if not out["ok"]:
+        return json.dumps({"error": f"核查失败: {out['error_message']}"}, ensure_ascii=False)
+
     try:
-        resp = requests.post(
-            "https://api.deepseek.com/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "deepseek-chat",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1,
-                "max_tokens": 500,
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        answer = data["choices"][0]["message"]["content"]
-
-        # 尝试解析 JSON
-        try:
-            result = json.loads(answer)
-            return json.dumps(result, ensure_ascii=False)
-        except json.JSONDecodeError:
-            return json.dumps({"raw_response": answer}, ensure_ascii=False)
-
-    except Exception as e:
-        return json.dumps({"error": f"核查失败: {str(e)}"}, ensure_ascii=False)
+        result = json.loads(out["content"])
+        return json.dumps(result, ensure_ascii=False)
+    except json.JSONDecodeError:
+        return json.dumps({"raw_response": out["content"]}, ensure_ascii=False)
 
 
 @tool
@@ -256,8 +245,6 @@ def write_report(topics: str, max_words: int = 800) -> str:
     Returns:
         JSON 格式，包含报告内容和引用的新闻 ID
     """
-    import requests
-
     # 搜索相关新闻
     topic_list = [t.strip() for t in topics.split(",") if t.strip()]
     all_results = []
@@ -308,36 +295,26 @@ def write_report(topics: str, max_words: int = 800) -> str:
 
 请直接输出报告内容，不要添加 JSON 格式。"""
 
-    try:
-        resp = requests.post(
-            "https://api.deepseek.com/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "deepseek-chat",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-                "max_tokens": 1500,
-            },
-            timeout=60,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        report = data["choices"][0]["message"]["content"]
+    # 走统一入口：报告生成本身是 Agent 链路里最贵的一次调用，必须计入（purpose='agent_report'）
+    from llm import chat
 
-        cited_ids = list(seen_ids)[:10]  # 引用的新闻 ID
+    out = chat(
+        [{"role": "user", "content": prompt}],
+        purpose="agent_report",
+        temperature=0.3,
+        max_tokens=1500,
+        timeout=60,
+        api_key=api_key,
+    )
+    if not out["ok"]:
+        return json.dumps({"error": f"报告生成失败: {out['error_message']}"}, ensure_ascii=False)
 
-        return json.dumps({
-            "topics": topics,
-            "report": report,
-            "cited_news_ids": cited_ids,
-            "news_count": len(unique_results),
-        }, ensure_ascii=False)
-
-    except Exception as e:
-        return json.dumps({"error": f"报告生成失败: {str(e)}"}, ensure_ascii=False)
+    return json.dumps({
+        "topics": topics,
+        "report": out["content"],
+        "cited_news_ids": list(seen_ids)[:10],  # 引用的新闻 ID
+        "news_count": len(unique_results),
+    }, ensure_ascii=False)
 
 
 # 工具列表（供 Agent 使用）

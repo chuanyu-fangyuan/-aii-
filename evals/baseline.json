@@ -1,0 +1,49 @@
+{
+  "recorded_at": "2026-09-23",
+  "note": "逐指标基线。snapshot=记录时的实测水平，tolerance=允许的抖动，floor=达标的硬下限（仅对已确认可达标的指标启用），target=尚未达到的目标值（只公示不拦截）。改动了 prompt / 检索 / 模型后请重新记录 snapshot，而不是放宽 tolerance。",
+  "rules": {
+    "eval_retrieval.py": {
+      "recall@k": {
+        "snapshot": 0.26,
+        "tolerance": 0.06,
+        "floor": null,
+        "target": 0.65,
+        "note": "低于 Week 2 报告记录的熔断线 0.65；原因与调优方向见 evals/report_week2.md。测试集改动后此值会变。"
+      },
+      "mrr": {
+        "snapshot": 0.39,
+        "tolerance": 0.08
+      },
+      "ndcg@k": {
+        "snapshot": 0.2388,
+        "tolerance": 0.08
+      }
+    },
+    "eval_rag.py": {
+      "faithfulness": {
+        "snapshot": 1.0,
+        "tolerance": 0.03,
+        "floor": 0.75,
+        "note": "Week 4 里程碑指标，达标线 0.75（plan §6.1）"
+      },
+      "answer_relevancy": {
+        "snapshot": 0.98,
+        "tolerance": 0.05
+      },
+      "context_precision": {
+        "snapshot": 0.9585,
+        "tolerance": 0.05
+      },
+      "rubric": {
+        "snapshot": 4.9,
+        "tolerance": 0.3,
+        "floor": 3.5,
+        "note": "LLM-as-judge 1-5 分"
+      }
+    }
+  },
+  "known_gaps": [
+    "检索 Recall@5 ≈ 0.26，低于报告记录的熔断线 0.65（测试集为关键词匹配构造、轻量嵌入模型、中文 BM25 分词三方面原因，详见 evals/report_week2.md）。当前只做回归拦截，不做绝对值拦截 —— 用 0.65 当硬阈值会让每次运行都失败，反而让门禁失效。",
+    "分类评测仍无人工标注集（evals/dataset.jsonl 的 expected_category 全为空），eval_classify.py 会提前返回、不产出指标，因此不参与门禁。补标注后请把 f1 加进本文件的 rules。"
+  ]
+}

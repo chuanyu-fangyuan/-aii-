@@ -167,11 +167,11 @@ def main():
         "SELECT source_id, COUNT(*) as cnt FROM news GROUP BY source_id"
     ).fetchall()
 
-    print(f"\n[done] 导入完成:")
+    print("\n[done] 导入完成:")
     print(f"  新增: {inserted}")
     print(f"  跳过(重复/无效): {skipped}")
     print(f"  库内总计: {total}")
-    print(f"  源分布:")
+    print("  源分布:")
     for s in sources:
         print(f"    {s['source_id']}: {s['cnt']} 条")
 

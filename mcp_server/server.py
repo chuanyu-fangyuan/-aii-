@@ -10,7 +10,6 @@
   uvicorn mcp_server.server:app
 """
 
-import json
 import os
 import sys
 
@@ -106,7 +105,5 @@ def write_report(topics: str, max_words: int = 800) -> str:
 
 # 启动入口
 if __name__ == "__main__":
-    import uvicorn
-
     # FastMCP 服务器默认使用 SSE 传输
     mcp.run(transport="sse")

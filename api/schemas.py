@@ -50,6 +50,8 @@ class Citation(BaseModel):
 class AskResponse(BaseModel):
     answer: str
     citations: list[Citation]
+    # 公开演示的配额提示：前端用来展示「今日剩余 N 次」
+    remaining_quota: int | None = None
 
 
 class StatsResponse(BaseModel):
@@ -59,6 +61,14 @@ class StatsResponse(BaseModel):
     total_cost_yuan: float
     total_input_tokens: int
     total_output_tokens: int
+    # Day 25 扩展：让看板能回答「钱花在哪个链路」「最近每天花多少」
+    error_traces: int = 0
+    avg_cost_per_call_yuan: float = 0.0
+    window_days: int = 0          # 0 = 全量
+    by_purpose: list[dict] = []
+    daily: list[dict] = []
+    cost_note: str = ""
+    ask_quota: dict = {}          # 公开问答配额使用情况（不含 IP）
 
 
 class TriggerResponse(BaseModel):

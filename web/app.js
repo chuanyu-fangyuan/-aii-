@@ -348,6 +348,31 @@
       + "。被遗忘的内容不再进图谱，但仍在资讯流中可读。";
   }
 
+  /* 成本透明（Day 25）：数据来自 fetch.py 构建期导出的 stats.json。
+   * 静态站没有后端可查，所以把「到这次构建为止累计花了多少」直接摊在页脚 ——
+   * 用多少说多少，也顺带说明这个项目确实是几块钱量级的成本。 */
+  function loadCostStats() {
+    fetch("stats.json", { cache: "no-cache" })
+      .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+      .then(function (d) {
+        if (!d || !d.calls) return;
+        var box = $("costNote");
+        if (!box) return;
+        var tokens = (d.input_tokens || 0) + (d.output_tokens || 0);
+        var purpose = (d.by_purpose || [])
+          .slice(0, 3)
+          .map(function (p) { return p.purpose + " " + p.calls + " 次"; })
+          .join(" · ");
+        box.textContent = "成本透明：累计 " + d.calls + " 次模型调用 / "
+          + tokens.toLocaleString("en-US") + " tokens / 约 ¥"
+          + (d.cost_yuan || 0).toFixed(4) + "（估算）"
+          + (purpose ? "；" + purpose : "")
+          + "。" + (d.unit_note || "");
+        box.hidden = false;
+      })
+      .catch(function () { /* 没有 stats.json（旧构建或本地未导出）就不显示 */ });
+  }
+
   /* ---------- 抽屉 ---------- */
   function openDrawer(contentNode) {
     var c = $("drawerContent");
@@ -596,7 +621,7 @@
     if (!box || !data.topics || !data.topics.length) return;
 
     box.hidden = false;
-    box.innerHTML = "";
+    box.replaceChildren();  // 不用 innerHTML：全站零 innerHTML 是可用测试锁住的不变量
 
     var header = h("div", "digest-header");
     header.appendChild(h("span", "digest-icon", "💡"));
@@ -666,6 +691,7 @@
       bindEvents();
       renderAll();
       loadInsight();
+      loadCostStats();
     })
     .catch(function (err) {
       $("loading").hidden = true;

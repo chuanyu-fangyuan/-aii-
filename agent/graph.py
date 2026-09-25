@@ -9,7 +9,6 @@ import json
 import os
 import sqlite3
 import sys
-from datetime import datetime, timezone
 from typing import Annotated, Dict, List, Optional, TypedDict
 
 from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
@@ -44,11 +43,19 @@ class AgentState(TypedDict):
 # ============================================================
 
 def _get_llm() -> ChatOpenAI:
+    """构造 Agent 用的 LLM。
+
+    挂上 llm.langchain_callbacks()：langchain 走的是自己的客户端，
+    不走 llm.chat 那条 urllib 路径，所以用回调把 token 用量写进 llm_traces，
+    否则节点里的 LLM 调用（含审核节点）在成本看板上完全不可见。
+    """
     api_key = os.environ.get("DEEPSEEK_API_KEY", "")
     if not api_key:
         from dotenv import load_dotenv
         load_dotenv(os.path.join(BASE_DIR, ".env"))
         api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+
+    from llm import langchain_callbacks
 
     return ChatOpenAI(
         model="deepseek-chat",
@@ -56,6 +63,7 @@ def _get_llm() -> ChatOpenAI:
         base_url="https://api.deepseek.com",
         temperature=0.3,
         max_tokens=2000,
+        callbacks=langchain_callbacks("agent"),
     )
 
 
@@ -128,8 +136,6 @@ def gather_node(state: AgentState) -> Dict:
 
 def verify_node(state: AgentState) -> Dict:
     """验证节点：核查收集到的数据"""
-    from agent.tools import verify_claim
-
     gathered = state.get("gathered_data", "")
     task = state["task"]
 
@@ -159,10 +165,10 @@ def synthesize_node(state: AgentState) -> Dict:
     from agent.tools import write_report
 
     task = state["task"]
-    gathered = state.get("gathered_data", "")
-    verification = state.get("verification_result", "")
 
-    # 使用 write_report 工具生成报告
+    # 注：write_report 内部会按主题重新检索库内新闻（retrieval.search）再生成报告，
+    # 所以这里不再重复传 gathered_data / verification_result ——
+    # 二者此前被读出来又没用上，属于死变量。
     report_result = write_report.invoke({"topics": task, "max_words": 1000})
 
     return {
@@ -209,9 +215,11 @@ def review_node(state: AgentState) -> Dict:
 
 
 def publish_node(state: AgentState) -> Dict:
-    """发布节点：输出最终结果"""
-    report = state.get("report", "")
+    """发布节点：输出最终结果
 
+    报告本体留在 state["report"] 里（synthesize 节点写入），
+    这里只推进状态与消息，不再把 report 读出来空转一遍。
+    """
     return {
         "messages": [AIMessage(content="任务完成，报告已发布")],
         "status": "published",
@@ -321,9 +329,13 @@ def save_run(state: AgentState, run_id: Optional[int] = None) -> int:
     )
 
     if run_id is None:
+        # completed_at 必须在这里也写：一次跑完就落库的场景（run_agent 正常路径）
+        # 走的是 INSERT，之前只在 UPDATE 分支写，导致列永远是 NULL、无法统计耗时。
         cursor = conn.execute(
-            """INSERT INTO agent_runs (task, status, plan, gathered_data, verification_result, report, verify_count, messages_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO agent_runs (task, status, plan, gathered_data, verification_result,
+                                      report, verify_count, messages_json, completed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?,
+                       CASE WHEN ? = 'published' THEN datetime('now') ELSE NULL END)""",
             (
                 state.get("task", ""),
                 state.get("status", "running"),
@@ -333,6 +345,7 @@ def save_run(state: AgentState, run_id: Optional[int] = None) -> int:
                 state.get("report", ""),
                 state.get("verify_count", 0),
                 messages_json,
+                state.get("status", "running"),
             ),
         )
         run_id = cursor.lastrowid

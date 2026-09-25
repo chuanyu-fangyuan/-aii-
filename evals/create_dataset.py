@@ -76,7 +76,7 @@ def create_dataset(count: int, seed: int):
 
     print(f"[done] 标注集已生成: {output_path}")
     print(f"  抽样: {len(sampled)} 条 (seed={seed})")
-    print(f"  请人工填写 expected_category 和 expected_verification 字段")
+    print("  请人工填写 expected_category 和 expected_verification 字段")
 
     conn.close()
 

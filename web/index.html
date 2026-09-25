@@ -76,6 +76,7 @@
         </div>
       </div>
       <div id="askError" class="ask-error" hidden></div>
+      <p id="askQuota" class="ask-quota" hidden></p>
     </div>
   </section>
 </main>
@@ -88,6 +89,7 @@
 <footer class="site-footer">
   <div id="sourceStatus" class="source-status"></div>
   <p id="memoryNote" class="footer-note" hidden></p>
+  <p id="costNote" class="footer-note cost-note" hidden></p>
   <p class="footer-note">
     发布时间以信息源原始时间为准（展示时区：Asia/Shanghai）；缺失时标注「发布时间未知」并展示采集时间。
     摘要为来源提供或页面截取，本站不生成内容。数据来源见 README。
@@ -99,11 +101,15 @@
   数据加载失败，请稍后刷新重试。<br><small id="loadErrorDetail"></small>
 </div>
 
+<script src="config.js"></script>
 <script>
   // API 基地址：仅供 AI 问答（ask.js）调用 /ask 端点。
-  // 首页资讯流/图谱刻意不走 API —— 图谱与记忆策略由 fetch.py 离线算好写进 data.json，
+  // 真实地址来自 config.js（fetch.py 构建时从 AI_API_BASE 注入，线上指向部署好的 API）；
+  // 未配置时回落到本机 8000 端口，本地开发照常可用。
+  //
+  // 注意：首页资讯流/图谱刻意不走 API —— 图谱与记忆策略由 fetch.py 离线算好写进 data.json，
   // API 的 /news 响应不含这些字段，混用会出现「空图谱 + 误导性提示」。
-  window.AI_API_BASE = "http://localhost:8000";
+  if (!window.AI_API_BASE) window.AI_API_BASE = "http://localhost:8000";
 </script>
 <script src="vendor/d3.v7.min.js"></script>
 <script src="app.js"></script>

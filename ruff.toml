@@ -1,0 +1,24 @@
+# ruff 配置：CI 与本地共用同一份规则，避免「CI 一套、本地一套」
+#
+# 忽略项说明（每条都有原因，不是为了让检查变绿而关规则）：
+#   E501 line-too-long   —— 项目按 ~120 列书写，中英文混排下 88 列会大量硬折行
+#   W293 blank-line-with-whitespace —— 文档字符串内的空行带空格，纯噪声
+#   E402 module-import-not-at-top-of-file —— 脚本需要先 sys.path.insert(BASE_DIR)
+#        再 `from db import ...` / `from retrieval import ...`（见 fetch.py、api/main.py、
+#        mcp_server/server.py、tests/*），这是该项目的既定装配方式；
+#        改成包内相对导入会牵动全部入口脚本，收益不足。
+# 其余 E/F/W 规则一律生效。
+
+target-version = "py312"
+line-length = 120
+
+# 虚拟环境、数据与前端产物不参与检查
+extend-exclude = [
+    ".venv",
+    "data",
+    "web",
+]
+
+[lint]
+select = ["E", "F", "W"]
+ignore = ["E501", "W293", "E402"]

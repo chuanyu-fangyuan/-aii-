@@ -3,6 +3,22 @@
 让关注 AI 的人，在几分钟内了解近期值得关注的动态。
 聚合多个独立信息源的 AI 资讯，**每日自动更新**，支持关键词搜索、来源筛选、时间范围切换，以及 Obsidian 风格的**关系图谱**浏览。
 
+```
+   4 个公开信息源
+        │  ① 采集 + 去重 + 遗忘策略              ┌─────────── GitHub Actions（每 3 小时，免费额度）───────────┐
+        ▼                                        │ fetch.py → analyze.py（LLM 分类/摘要）→ 评测门禁 → 部署  │
+   data/news.db（SQLite，随仓库提交）            └───────────────────────────┬──────────────────────────────┘
+        │  ② 导出静态 JSON                                              │
+        ▼                                                              ▼
+   web/data.json ──► GitHub Pages（纯静态：资讯流 + 关系图谱，访客零等待）
+   web/stats.json ─► 页脚「成本透明」区块
+
+   可选：本机/容器 API（线上不部署）──► AI 问答 /ask（检索 + LLM + 引用校验）· 人工审核 /reviews · 成本看板 /api/stats
+                                        同一套 LLM 客户端与 trace 表，供 Agent（LangGraph）与 MCP Server 复用
+```
+
+**文档导航**：本文件（概览 / 部署 / 案例复盘）· [ARCHITECTURE.md](ARCHITECTURE.md)（数据流 / 模块 / 数据模型 / 取舍）· [EVALS.md](EVALS.md)（指标口径 / 门禁规则 / 已知差距）
+
 ## 功能一览
 
 | 模块 | 说明 |
@@ -17,7 +33,7 @@
 
 | 来源 | 获取方式 |
 |---|---|
-| Hacker News | Algolia 官方 API（`hn.algolia.com`，AI/LLM 关键词） |
+| Hacker News | Algolia 官方 API（`hn.algolia.com/api/v1/search_by_date?query=AI&tags=story`，按时间倒序取 40 条） |
 | TechCrunch AI | 公开 RSS |
 | The Verge AI | 公开 RSS |
 | arXiv cs.AI | 公开 RSS |
@@ -26,12 +42,52 @@
 
 ## 本地运行
 
+**Windows 一键启动**（推荐，双击即可）：
+
+```
+启动全栈.bat      # 同时起 API(8000) + 静态站(8765)，并自动打开浏览器
+```
+
+它做三件事：① 探活 8000 —— 已有健康 API 就复用，没有才 `uvicorn` 起一个（避免端口冲突）；② 等 API 就绪（冷启动约 10 秒，失败只提示不阻塞）；③ 起静态站并打开 `http://127.0.0.1:8765/`。两个服务分别占用一个命令行窗口，**关掉窗口即停止对应服务**。只想要静态预览（不需要 AI 问答）的话，用原来的 `启动预览.bat` 即可。
+
+> 注意：**本地不会自动启动 API**，这是设计使然 —— 线上站点是纯静态部署（GitHub Pages），只有「AI 问答」「人工审核」「成本看板」需要后端。本地点问答若报「连不上 API 服务」，就是这个原因；线上演示站要具备问答能力，见下面的「部署到 Fly.io」。
+
+手动命令（macOS / Linux / 想自己控端口）：
+
 ```bash
 pip install -r requirements.txt
-python fetch.py          # 采集 + 去重 + 导出 web/data.json
-cd web && python -m http.server 8080
-# 打开 http://localhost:8080
+python fetch.py                                        # 采集 + 去重 + 导出 web/data.json
+python -m uvicorn api.main:app --port 8000             # 可选：AI 问答 / 人工审核（需先激活 venv）
+cd web && python -m http.server 8080                   # 静态预览
+# 浏览器打开 http://localhost:8080
 ```
+
+> Windows 下若已按上面的方式建好 `.venv`，把 `python` 换成 `.venv\Scripts\python.exe` 即可（`启动全栈.bat` 已自动处理）。
+
+## Docker 三步启动（API）
+
+静态站不需要容器（Pages 即可），容器化的是 **API 服务**（共 10 个端点：`/health`、`/news`、`/news/{id}`、`/analyze/trigger`、`/ask`、`/api/stats`、`/insight`、`/reviews`、`/reviews/submit`、`/review/{id}`）：
+
+```bash
+git clone <仓库地址> && cd ai-daily-brief   # 1. 拿到代码与 data/news.db
+cp .env.example .env                        # 2. 可选：填 DEEPSEEK_API_KEY（不填仅 /ask 不可用）
+docker compose up --build                   # 3. 起服务
+# → 接口文档 http://localhost:8000/docs   → 健康检查 http://localhost:8000/health
+```
+
+验证要点：
+
+- `/health` 返回 `{"status":"ok","news_count":1384}`，说明容器读到了挂载进来的真实库；
+- 嵌入模型（`BAAI/bge-small-zh-v1.5`）已在**构建期**写入镜像，首次检索不需要联网；
+- `data/` 以卷挂载，Actions/本地 `fetch.py` 更新数据后**不用重建镜像**即可生效；
+- 镜像以非 root 用户 `app` 运行，`.env` 被 `.dockerignore` 排除，密钥不进镜像层。
+
+**取舍说明（与原计划的偏离）**：原计划是 `app + postgres(pgvector) + 一次性 migrate` 三件套。
+实际落地只有一个 `api` 服务，理由：本项目的向量检索是「本地小模型嵌入 + SQLite BLOB」
+（`retrieval.py`），单写者、当前 1.9MB 数据量，pgvector 没有收益却要多维护连接池与迁移脚本；
+`db.py` 的 PostgreSQL 分支（`DATABASE_URL`）保留但**未启用**，如实标注而非假装支持。
+schema 初始化改为 API 启动时执行 `init_sqlite`（幂等：`CREATE TABLE IF NOT EXISTS` + 按缺失列 `ALTER`），
+因此也不需要单独的 migrate 容器。
 
 ## 部署
 
@@ -46,10 +102,59 @@ cd web && python -m http.server 8080
 
 ## 技术选型理由
 
-- **Python + feedparser 采集，SQLite 存储**：URL 规范化哈希 + 标题哈希双去重，`INSERT OR IGNORE` 天然幂等——重复导入同一输入不产生重复记录。
+- **Python + feedparser 采集，SQLite 存储**：URL 规范化哈希 + 标题哈希双去重，`INSERT OR IGNORE` 天然幂等——重复导入同一输入不产生重复记录。单文件库随仓库提交，schema 用幂等 `ALTER` 原地升级，不需要独立迁移脚本/容器。
 - **导出静态 `data.json` + 原生前端**：零后端运行时成本，任何静态托管可复现；前端无框架，评审在干净环境只需 Python 即可跑通全链路。
 - **D3.js 本地打包**（`web/vendor/d3.v7.min.js`）：图谱不依赖 CDN，离线可运行。
+- **统一 LLM 入口 `llm.py`**：请求、超时、错误分类、计量、埋点收敛到一处。收口前 5 处各写一份 `requests.post`，只有分类链路会记账 —— 成本看板只能看到 13% 的调用（对账实测）；收口后分析/问答/洞察/Agent/评测全部入账。
+- **本地嵌入模型 + BM25 + RRF 融合**：嵌入在本地推理（Docker 构建期落盘，运行时离线可用），零边际成本；代价是轻量模型召回有限（Recall@5=0.26，见 `EVALS.md`）。
 - **外部定时器（cron-job.org）+ GitHub Actions**：不依赖个人电脑开机；GitHub Actions 处理采集/部署（免运维、artifact 上发），cron-job.org 处理调度（不依赖 GitHub 自身 `schedule` 事件，规避新仓库偶发不派发的问题）；详细原因与验证见「案例四」「案例六」。
+
+> 完整的数据流、模块依赖、数据模型与设计取舍见 **[ARCHITECTURE.md](ARCHITECTURE.md)**；评测口径、指标定义与门禁规则见 **[EVALS.md](EVALS.md)**。
+
+## 部署 API（让线上演示站也能 AI 问答）
+
+**为什么需要这一步**：站点是纯静态的（GitHub Pages），问答必须有个后端。推荐使用 **Railway.app**（支持 Docker，GitHub 登录，有免费额度）。
+
+**Railway.app 部署步骤**（约 5 分钟）：
+
+1. 访问 [railway.app](https://railway.app)，用 GitHub 账号登录
+2. 点击 "New Project" → "Deploy from GitHub repo" → 选择本仓库
+3. 在 Settings → Variables 中添加：
+   - `DEEPSEEK_API_KEY` = 你的 DeepSeek API Key
+4. 在 Settings → Generate Domain 中生成公开域名
+5. 等待自动部署完成（首次约 3-5 分钟）
+
+**把 API 地址交给 Pages**：
+
+```bash
+# GitHub 仓库 → Settings → Secrets and variables → Actions → Variables → New variable
+# 名称 AI_API_BASE，值 https://your-app.up.railway.app（Railway 分配的域名）
+```
+
+**为什么不用改代码**：定时工作流会读 `AI_API_BASE`，`fetch.py` 导出时把它写进 `web/config.js`；前端从该文件取地址（本地未配置则自动回落 `http://localhost:8000`）。
+
+**部署后自检**：
+
+```bash
+curl https://your-app.up.railway.app/health                     # 期望 {"status":"ok", ...}
+curl -s https://your-app.up.railway.app/api/stats | head -c 200 # 能看到 ask_quota 配额视图
+# 打开 Pages 站点 → 「AI 问答」标签 → 提问，回答下方显示「今日还可提问 N 次」
+```
+
+### 公开演示的配额（保护你的 API 额度）
+
+演示地址公开后，`/ask` 就是「任何人点一下都花你钱」的入口，所以默认带双闸门（`api/ratelimit.py`）：
+
+| 闸门 | 默认值 | 环境变量 | 作用 |
+|---|---|---|---|
+| 单 IP 每日 | **5 次** | `ASK_DAILY_PER_IP` | 防个人刷；超限返回 429 + 友好说明 |
+| 全局每日 | 100 次 | `ASK_DAILY_GLOBAL` | 防换 IP 刷；封顶约 ¥1/天 |
+
+- 配额在**检索之前**判定 —— 拒绝时不加载嵌入模型、不调 LLM，一分钱不花（有测试锁定这一点）。
+- 前端显示剩余次数（「公开演示：今日还可提问 N 次」），避免用户被突然拒绝。
+- **已知边界**：计数在内存中，服务重启即清零（跨实例/持久化需引入 Redis，对本场景不值得）；按北京日期切分，与站点展示时区一致。
+
+> 不想公开问答的话：不配置 `AI_API_BASE` 即可 —— 演示站保持纯静态，问答模块提示「连不上 API 服务」，其余功能完全正常。这正是计划书风险表第 12 条的降级方案。
 
 ## 时间口径
 
@@ -59,9 +164,12 @@ cd web && python -m http.server 8080
 
 ## 安全
 
-- 无密钥、无第三方账号，前端无敏感信息。
-- 外部内容（标题/摘要）一律以 `textContent` 渲染，不使用 `innerHTML`，防 XSS。
+- 无密钥、无第三方账号，前端无敏感信息（`.env` 被 `.dockerignore` 排除，不进镜像层）。
+- 外部内容（标题/摘要/来源）一律以 `textContent` 渲染，**全站不出现 `innerHTML` / `outerHTML` / `insertAdjacentHTML` / `document.write`**，防 XSS。
 - 外链均带 `rel="noopener noreferrer"`。
+- 前端**不引用任何外部 CDN**（D3 本地打包），离线/内网环境可用。
+
+> 以上四条不是口号，而是 `tests/test_frontend_safety.py` 里逐条断言的不变量 —— 文档里的承诺没有测试兜着，过两周就会变成假话。
 
 ## 验证记录
 
@@ -73,6 +181,13 @@ cd web && python -m http.server 8080
 | 定时自动更新 | 外部定时器 → `workflow_dispatch` | ✅ **已通过**（详见「案例六」）：cron-job.org 每 3 小时调用 GitHub API 派发 `workflow_dispatch`，北京 12:20 真实触发 run #14 success，线上 `data.json` 的 `generated_at` 即时刷新到 12:20:36；新闻总数 317 → 331，`hackernews` 抓取 40 条新增 2 条（其余来源 `no_new`，与「抓取失败」正确区分）。同时 GitHub 原生 `schedule` 事件在 14 次运行中**始终为 0**——配置无错，问题在调度层，详「案例四」。 |
 | 并发 push 竞态 | 查看失败运行 34927770343 的步骤日志 | ✅ 已定位并修复：采集成功但「提交更新结果」被拒（non-fast-forward），导致整次运行失败。已改为「每次尝试先回到远端最新 → 重新采集 → 推送」，最多重试 3 次，见「案例五」 |
 | 遗忘机制与图谱性能 | 对照基准（旧版 vs 新版，agent-browser 实测，927 条真实数据） | ✅ 图谱 SVG 元素 12534 → 1562，「近 7 天」重绘阻塞 25.7ms → 10.9ms，资讯流↔图谱连续切换 121.8ms → 24.8ms，FPS 51 → 62，data.json 801KB → 472KB；遗忘提示、关键词聚焦、悬停详情人工验证通过。复测中发现并修复本地库与云端库分叉问题（详「案例七」） |
+| Docker 一键启动 | `docker compose up --build` 后实测 | ✅ 构建成功（torch 2.14.0+cpu，嵌入模型构建期落盘）；`/health` 返回 `news_count=1384`、`/docs` HTTP 200、`/news` 正常返回；`--network none` 下容器内检索仍可用（3 条），证明模型不依赖运行时联网；挂载空目录启动时自动建表（`news_count=0` 仍健康）。镜像 2.36GB（torch 769MB + scipy 109MB + 模型 93MB），非 root 运行 |
+| 单测与覆盖率 | `pytest tests/ --cov=. --cov-fail-under=50` | ✅ **146 passed / 2 skipped，覆盖率 58.11%**（含 db、llm、middleware、insight、analyze、agent 图结构、MCP 工具清单）。测试全部离线可跑：LLM 与网络用假对象替代，API 用例跑在临时库 |
+| Lint | `ruff check .` | ✅ All checks passed（`ruff.toml` 逐条写明忽略理由） |
+| 评测回归门禁 | `python evals/run_all.py --gate-config evals/baseline.json` | ✅ 门禁通过；合成回归场景实测可拦截（跌破下限 / 较基线下滑超容差 / 评测脚本跑不通三类均拦住） |
+| 成本可观测性 | 容器内实测 `/api/stats` + 真实 `/ask` 调用 | ✅ 367→368 次调用、¥0.7396→¥0.7410 实时累加；按用途拆分（analyze 365 / ask 3）、`?days=1` 时间窗生效；页脚静态看板实测渲染；真实调用 11 in / 28 out tokens → ¥0.000131（非峰值半价，与手算一致） |
+| 前端安全不变量 | `pytest tests/test_frontend_safety.py` | ✅ 7 条断言：全站零 `innerHTML`/`outerHTML`/`insertAdjacentHTML`/`document.write`、零外部 CDN 引用、D3 本地打包完整、外链 `_blank` 必带 `noopener noreferrer`（修正了 ask.js 缺 `noreferrer` 的真实缺陷） |
+| 文档与代码一致性 | 三份文档（README / ARCHITECTURE / EVALS）逐条交叉核对 | ✅ 核对并修正 6 处不符：HN 查询串描述、测试数与覆盖率（106→146、53.6%→58.11%）、Docker 端点清单、手动命令的跨平台写法、「不使用 innerHTML」与「外链均带 noreferrer」两条不成立的安全声明（已改代码并加测试）；另修正 `/ask` 提示词版本与成本量纲（详见 Week 4 章节） |
 
 （缺失日期、长标题、搜索无结果等界面状态已在前端实现并人工检查。）
 
@@ -94,6 +209,9 @@ cd web && python -m http.server 8080
 - 关键词提取为规则 + 实体词典（未调 LLM，零成本），偶有噪声词；词典在 `fetch.py` 的 `ENTITY_LEXICON` 可扩充。
 - 图谱按「新闻-关键词」建边，不做跨媒体同一事件的语义聚合（题目注明非必做）。
 - 资讯流展示最近 30 天 / 1500 条（数据库保留 90 天历史，图谱另有 7 天记忆窗口）。
+- **检索 Recall@5 ≈ 0.26，低于自定熔断线 0.65**（原因与调优方向见 `evals/report_week2.md`）。该指标当前只做回归拦截、不做绝对值拦截，且每次跑门禁都会打印公示，避免被遗忘。
+- **分类评测尚无人工标注集**（`evals/dataset.jsonl` 的 `expected_category` 全为空），对应门禁项缺失，门禁会明确报 WARN 而不是静默通过。
+- **未纳入 black 强制检查**：既有代码是手写风格（刻意对齐的行尾注释），black 全量重排会产生 900+ 行纯格式 diff，把真实改动淹没。CI 只跑 ruff（规则见 `ruff.toml`，逐条写明了忽略理由）；本地想统一风格可自行 `black .`。
 
 ## 成本
 
@@ -271,13 +389,142 @@ GitHub UI 把 `workflow_dispatch` 显示成「手动运行」是它的分类方�
 - 缓解：① 三指标中 context_precision 可独立复核（检索片段的相关性人工抽查即可验证）；② 陷阱题（#19/#20）的「声明不足而非编造」行为可人工直接读答案验证，已验证通过；③ report_week3.md 中把「裁判=生成模型」列为已知局限。
 - 教训：LLM-as-judge 的分数不是终点，要设计**至少一个不依赖裁判的独立检查点**（陷阱题、人工抽查、可计算指标）。
 
+**案例十一：门禁设计反噬——「统一阈值」把部署永久卡死**
+
+- 现象：Week 4 加了评测回归门禁（`--baseline 0.75`）并让 `deploy` 依赖它。上线前体检发现，只要推送就会永久阻断部署。
+- 定位：把真实评测输出喂给门禁函数复现，`[FAIL] eval_retrieval.py: recall@k=0.2600 < baseline=0.75`。检索长期在 0.26（Week 2 报告已记录其低于 0.65 熔断线）、RAG faithfulness 是 1.00，把两者塞进同一个 0.75 下限，等于要求「本来就未达标的指标立刻达标」；同时分类评测因标注集为空提前返回、不产出指标，旧实现把「没指标」当成通过——同一套门禁既会误杀又会漏放。
+- 修复：改为逐指标声明（snapshot / tolerance / floor / target），未达标项只公示不拦截、回归则硬拦；「没指标」改为 WARN 而非静默通过。另外做了成本分流：push 触发跑完整评测，定时数据更新跳过 LLM 评测（否则每 3 小时烧 80 次调用）。
+- 教训：**门禁的职责是防退化，不是催达标**。把「目标值」当「下限」用，会把一条本来能拦住真问题的防线变成每天都在误报的噪声源——真出现退化时反而没人看了。同时，任何「没数据就跳过」的判定都要显式报出来，静默通过的门禁等于没有门禁。
+
+**案例十二：Agent 的「闭环」是假的——图上连了边，数据没接上（Agent 失败模式）**
+
+- 现象：状态图里 `verify → gather` 有一条补证回边，`verify_count < 2` 时才走综合，看起来「验证不过就补数据」的闭环成立。做 lint 清理时发现 `synthesize_node` 里两个变量 `gathered` / `verification` 被读出来却从未使用。
+- 定位：`synthesize_node` 的报告由 `write_report` 工具生成，而该工具**自己按主题重新检索**库内新闻再让 LLM 写 —— 于是 Agent 前面辛苦收集的数据、以及验证节点的结论，对最终报告**没有任何影响**。回边只是让流程多跑一轮、多花钱，却没有把新证据带进报告。
+- 修复：先如实标注（`synthesize_node` 与 `publish_node` 的注释写清「报告不消费 gathered/verification」），并把死变量清掉；要真正闭环，应把证据显式拼进 `write_report` 的入参 —— 这属于行为变更，需配套评测确认收益，故留作已知项（`ARCHITECTURE.md` 的失败模式表里列为「报告与证据脱节」）。
+- 教训：**判断一个循环是否有效，看数据流而不是看箭头**。lint 报的「变量赋值未使用」往往不是洁癖问题，而是「这条线断了」的信号 —— 死变量就是断线的显影剂。
+
+**案例十三：Agent 运行记录永远缺「结束时间」（Agent 失败模式）**
+
+- 现象：`agent_runs` 表有 `completed_at` 列，但查库发现所有行都是 NULL，无法统计任何一次运行的耗时。
+- 定位：`save_run()` 有两条分支 —— 更新已有 run 时写了 `completed_at = CASE WHEN status='published' THEN datetime('now')`，而**新建 run 的 INSERT 分支完全没写这一列**。恰好 Agent 的正常路径（一次跑完就落库）走的是 INSERT，于是这列永远是空。
+- 修复：INSERT 分支补上同样的 CASE 表达式；用单测锁住「published 状态必须写入完成时间」。
+- 教训：同一个字段在两条分支上必须同时维护 —— 只在「更新」路径写、忘了「新建」路径，是典型的**分支不对称缺陷**，而且它不会报错，只会在你哪天想看统计时发现数据是空的。
+
+
 ### 成本核算（全项目，截至 Week 3）
+
 
 | 项 | 用量 | 估算成本 |
 |---|---|---|
-| 分类/分析链路（365 次，`llm_traces` 实测） | 输入 178,861 tok / 输出 45,967 tok | ≈ ¥1.5 |
-| RAG 评测 v2（80 次调用） | 输入 56,521 tok / 输出 14,786 tok | ≈ ¥0.5 |
-| Agent 运行 + HITL/MCP/RAG 开发测试 | 约 10 余次完整运行 | ≈ ¥0.5–1 |
-| **LLM 总成本** | — | **≈ ¥3 以内**（DeepSeek chat 官方牌价估算） |
+| 分类/分析链路（365 次，`llm_traces` 实测） | 输入 178,861 tok / 输出 45,967 tok | ≈ ¥0.74 |
+| RAG 问答与评测（`/ask` 实测 + 评测明细） | 约 130 次调用 | ≈ ¥0.4 |
+| Agent 运行 + HITL/MCP 开发测试 | 约 10 余次完整运行 | ≈ ¥0.3 |
+| **有 trace 可查的小计** | 约 500 次调用 | **≈ ¥1.4** |
+| 收口前未埋点的评测/Agent 调用 | 控制台单日 ¥0.39 中有 87% 属于此类 | 约 ¥1–1.5 |
+| **LLM 总成本（估算）** | — | **≈ ¥2.5–3** |
 
-托管（GitHub Pages + Actions）与调度（cron-job.org）维持 0 成本。整个项目自始至终未使用付费服务。
+托管（GitHub Pages + Actions）与调度（cron-job.org）维持 0 成本。整个项目自始至终未使用付费服务（唯一付费依赖是 DeepSeek 的按量调用）。
+
+> 说明：最初表格写「≈ ¥3」是早期按调用次数粗估；Day 25 接入逐次计量后发现计价量纲错了 1000 倍（少算），修正后有 trace 的部分为 ¥1.4。差额来自收口之前**没有埋点**的评测/Agent 调用 —— 这不是估算，而是与控制台账单对账后的结论，对账过程见「首次对账结果」。
+
+## Week 4：质量门禁与工程化
+
+### 评测结果摘要
+
+| 评测 | 数据集 | 关键指标 | 当前值 | 达标线 | 状态 |
+|---|---|---|---|---|---|
+| 检索 | 10 条 query | Recall@5 / MRR / NDCG@5 | 0.26 / 0.39 / 0.24 | 0.65 | ❌ 未达标（已公示，调优方向见 EVALS.md） |
+| 分类 | 30 条（**0 条已标注**） | macro-F1 | — | 0.70 | ⚠️ 未启用（缺人工标注） |
+| RAG 问答 | 20 题 | faithfulness / answer_relevancy / context_precision / rubric | 1.00 / 0.98 / 0.96 / 4.9 | 0.75 / — / — / 3.5 | ✅ 达标 |
+| Embedding 一致性 | 库内随机样本 | cos_sim | 1.000000 | > 0.99 | ✅ |
+
+口径、局限（裁判与生成模型同源、样本量小）与门禁规则详见 **[EVALS.md](EVALS.md)**。
+
+### 门禁组成
+
+三部分都在 `.github/workflows/update.yml` 的 `evals` 作业里，且 `deploy` 依赖它：
+
+| 关卡 | 命令 | 阈值 |
+|---|---|---|
+| 单元测试 | `pytest tests/ --cov=. --cov-fail-under=50` | 覆盖率 ≥ 50%（实测 58.11%，146 条用例） |
+| Lint | `ruff check .` | 0 error（规则见 `ruff.toml`） |
+| 评测回归 | `python evals/run_all.py --gate-config evals/baseline.json` | 见下 |
+
+
+### 门禁为什么要从「一个数字」改成逐指标规则
+
+最初实现是 `--baseline 0.75`：给所有评测的所有同名指标套同一个下限。实测直接判死——检索的 `recall@k` 长期在 0.26，RAG 的 `faithfulness` 是 1.00，两者量纲、口径、可达性完全不同；统一阈值的结果是**每次运行都失败、`deploy` 被 `needs: evals` 永久卡住**，门禁反而失去意义。
+
+现在改为 `evals/baseline.json` 逐指标声明：`snapshot`（记录时水平）+ `tolerance`（允许抖动）+ `floor`（达标硬下限，仅对已确认可达标的指标启用）+ `target`（未达标目标，只公示不拦截）。实测拦截能力（合成数据验证）：
+
+```
+拦截 | faithfulness 跌破达标线 0.75      | faithfulness=0.7 < 下限 0.75
+拦截 | 检索 recall 下滑到 0.10           | recall@k=0.1 较基线 0.26 下滑超过 0.06
+拦截 | 评测脚本跑不通                    | eval_rag.py: 评测未跑通
+放行 | 一切正常                          |
+```
+
+另一处修正是：**「没指标」不再等于「通过」**。分类评测在标注集为空时会提前返回、不产出指标，旧实现会静默放行，等于该项门禁形同虚设；现在会打印 WARN 并在报告里留痕。
+
+### 评测成本控制
+
+RAG 评测每轮要跑 80 次 LLM 调用（约 ¥0.5–1），而工作流每 3 小时被 cron 触发一次——若每轮都跑满，一天 ¥4–8、一个月上百元，与「低成本」目标冲突。因此按触发来源分流：**push（代码变更）跑完整评测，定时数据更新只跑零成本的检索/分类评测**，两条路径共用同一份门禁规则。
+
+### 单测不做的事
+
+不新增会花钱或依赖外网的用例：LLM 调用、网络请求一律用假对象顶替（`tests/test_analyze.py` 用假的 `urlopen` 覆盖成功/HTTP 错误/非 JSON/超时四条路径）。API 测试全部跑在临时库上——早期版本直接对着 `data/news.db` 跑，`test_submit_review` 真往 `pending_review` 插了一行「测试」，脏数据进了仓库还会显示在线上审核页；现在临时库 + 夹具隔离，并加断言防止回退。
+
+## 可观测性与成本看板（Day 25）
+
+### 一个入口管住所有 LLM 调用
+
+收口前，仓库里有 **5 处各自 `requests.post` 到 DeepSeek 的代码**（分类、问答、洞察、Agent 的两个工具），而只有分类链路会写 `llm_traces`。结果是成本看板只能看到一条链路，问答与 Agent 的消耗全是黑洞；每处还各写一套重试/超时/错误分类，口径不一致。
+
+现在统一到 `llm.py`：
+
+| 关注点 | 做法 |
+|---|---|
+| 调用 | `llm.chat(messages, purpose=...)` —— 请求、超时、JSON 模式、错误分类一处实现 |
+| 埋点 | 每次调用（**含失败**）都写 `llm_traces`：model / tokens / latency / cost / status / news_id |
+| 用途维度 | `purpose ∈ {analyze, ask, insight, agent_verify, agent_report, eval, agent}`，看板据此区分钱花在哪条链路 |
+| LangChain | Agent 走 langchain 自己的客户端，用 `llm.langchain_callbacks()` 回调把 token 用量落库 |
+| 计量 | 按官方价目表分三档计价：输入缓存命中 / 未命中 / 输出，并自动区分**峰谷时段**（峰值是非峰值的 2 倍） |
+
+### 成本看板
+
+- **接口**：`GET /api/stats[?days=N]` —— 累计与按用途、按日分布、错误调用数、均次成本；`days=0` 为全量。
+- **静态站**：线上是纯静态部署（Pages 上没有 API 可调），因此 `fetch.py` 在导出时同时生成 `web/stats.json`，页脚直接展示「累计 N 次调用 / X tokens / 约 ¥Y」。
+
+```
+成本透明：累计 368 次模型调用 / 224,952 tokens / 约 ¥0.7410（估算）；analyze 365 次 · ask 3 次。
+按 DeepSeek 官方价目表估算（含峰谷与缓存价），实际以账户账单为准
+```
+
+### 修掉的两个真问题
+
+1. **计价量纲错 1000 倍**：常量注释写「元/千 token」，计算却除以 1,000,000。365 次分类调用的累计费用被记成 **¥0.0003**，与账单差几个数量级。改为按官方价目表（USD/百万 token）+ 汇率折算 + 峰谷/缓存分档后，同一批数据重算为 **¥0.7394**（`python llm.py --recost` 可重算历史行）。
+2. **线上跑的提示词不是评测的那份**：Week 3 的结论是「线上切 v2」，但 `/ask` 仍指向 `prompts/rag_v1.txt`，而门禁评的是 v2 —— 报告的「评测口径与生产一致」当时并不成立。现已改指 `rag_v2.txt`，并实测走通（引用 3 条，成本计入 `purpose='ask'`）。
+
+### 对账方式（验收项）
+
+`/api/stats` 的金额是**按官方价目表估算**，不是账单。对账用 `python llm.py --reconcile <账单金额> --days <窗口天数>`，它会打印估算值、账单值、比值与下一步排查方向（账单偏高 → 先查未埋点调用；估算偏高 → 先查峰谷与缓存价）。
+
+项目内可校验的部分已由测试锁定：单位量纲、峰谷 2 倍关系、缓存价差 > 40 倍、百万输入 token 的成本落在 ¥1.5–3。
+
+### 首次对账结果（2026-09-23）
+
+控制台当日：**255 次请求 / 192,841 tokens / ¥0.39**。与本地记录比对：
+
+| 口径 | 调用数 | tokens | 金额 | 隐含单价 |
+|---|---|---|---|---|
+| 控制台账单 | 255 | 192,841 | ¥0.39 | **¥2.02 / 百万 token** |
+| 本地可解释部分 | 32 | 20,003 | ¥0.047 | **¥2.35 / 百万 token** |
+| 覆盖率 | **13%** | **10%** | — | — |
+
+两个结论：
+
+1. **单价口径成立**：估算 ¥2.35/百万 vs 账单隐含 ¥2.02/百万，同一量级（差异来自峰谷权重），说明「官方价目表 + 汇率折算」的模型站得住。
+2. **金额差的主因是埋点覆盖率，不是价格**：当天本地只能解释 13% 的调用 —— 用户跑的 RAG 评测（40 条结果 = 80 次调用，发生在收口之前）**一次 trace 都没留下**。这正是统一入口要补的洞；收口后评测/问答/Agent/CI 分析全部计入，下一次对账可逐笔对齐。
+
+> 待校准项：官方文档写峰值时段为「UTC 周一至周五 01:00–04:00、06:00–10:00」，但账单隐含单价更接近非峰值。等埋点覆盖率满 100%，再用一整天数据判断；需要改的只有 `db.PEAK_HOURS_UTC` 一处。
+

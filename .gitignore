@@ -27,5 +27,14 @@ build/
 _live.json
 _*.json
 
-# Pytest
+# Pytest / 覆盖率产物
 .pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# 门禁运行产物（每次跑评测都会重写；权威报告见 evals/report_week*.md）
+evals/eval_report.json
+
+# 测试临时目录（pytest 并行产物）
+.pt_*/

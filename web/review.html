@@ -140,7 +140,9 @@
     <div id="reviewList"></div>
   </div>
 
+  <script src="config.js"></script>
   <script>
+    // 地址来源同首页：config.js（构建期注入）→ 缺省回落本机 8000
     const API_BASE = window.AI_API_BASE || "http://localhost:8000";
     let currentStatus = "pending";
 
