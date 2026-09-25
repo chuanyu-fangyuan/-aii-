@@ -11,7 +11,7 @@
       "calls": 365,
       "input_tokens": 178861,
       "output_tokens": 45967,
-      "cost_yuan": 0.7394252399999998
+      "cost_yuan": 0.73942524
     },
     {
       "purpose": "ask",
@@ -30,7 +30,7 @@
     {
       "day": "2026-09-22",
       "calls": 3,
-      "cost_yuan": 0.006155699999999998
+      "cost_yuan": 0.006155699999999999
     },
     {
       "day": "2026-09-21",
@@ -41,5 +41,5 @@
   "estimated": true,
   "peak_now": true,
   "unit_note": "按 DeepSeek 官方价目表估算（含峰谷与缓存价），实际以账户账单为准",
-  "generated_at": "2026-09-24T06:22:12.432762+00:00"
+  "generated_at": "2026-09-25T03:49:51.467151+00:00"
 }
