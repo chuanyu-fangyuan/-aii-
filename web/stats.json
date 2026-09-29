@@ -1,17 +1,17 @@
 {
-  "calls": 636,
-  "input_tokens": 312071,
-  "output_tokens": 80303,
-  "cost_yuan": 1.027465,
+  "calls": 645,
+  "input_tokens": 316539,
+  "output_tokens": 81403,
+  "cost_yuan": 1.034504,
   "error_calls": 1,
-  "avg_cost_per_call_yuan": 0.001616,
+  "avg_cost_per_call_yuan": 0.001604,
   "by_purpose": [
     {
       "purpose": "analyze",
-      "calls": 630,
-      "input_tokens": 309758,
-      "output_tokens": 79318,
-      "cost_yuan": 1.0181118201
+      "calls": 639,
+      "input_tokens": 314226,
+      "output_tokens": 80418,
+      "cost_yuan": 1.0251515553
     },
     {
       "purpose": "ask",
@@ -24,8 +24,8 @@
   "daily": [
     {
       "day": "2026-09-29",
-      "calls": 35,
-      "cost_yuan": 0.038430184199999995
+      "calls": 44,
+      "cost_yuan": 0.045469919399999996
     },
     {
       "day": "2026-09-28",
@@ -66,5 +66,5 @@
   "estimated": true,
   "peak_now": false,
   "unit_note": "按 DeepSeek 官方价目表估算（含峰谷与缓存价），实际以账户账单为准",
-  "generated_at": "2026-09-29T19:22:09.987614+00:00"
+  "generated_at": "2026-09-29T19:24:55.779952+00:00"
 }
