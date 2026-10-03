@@ -183,3 +183,29 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # ============================================================
+  # 保活（免费托管的必要动作）
+  # Hugging Face 免费 Space 连续 48 小时无访问会休眠，访客首次打开要等 30–90 秒冷启动。
+  # 本工作流本来就每 3 小时跑一次，顺手 ping 一下 /health 即可让它保持唤醒
+  #（/health 不计入问答配额，零成本）。没配 AI_API_BASE 时整步跳过。
+  # ============================================================
+  keepalive:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: 探活线上 API（顺便保活）
+        env:
+          AI_API_BASE: ${{ vars.AI_API_BASE }}
+        run: |
+          if [ -z "$AI_API_BASE" ]; then
+            echo "未配置 AI_API_BASE，跳过保活（演示站按纯静态运行）"
+            exit 0
+          fi
+          # 注意：魔搭网关对非浏览器 User-Agent 直接返回 403（请求到不了容器），
+          # 所以保活请求必须带浏览器 UA，否则永远探活失败、保活无效。
+          if curl -sf -m 20 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36" "${AI_API_BASE%/}/health"; then
+            echo "API 在线，已保活"
+          else
+            echo "::warning::API 探活失败（可能正在冷启动或部署中），不影响静态站更新"
+          fi
