@@ -94,12 +94,12 @@
     },
     {
       "day": "2026-09-25",
-      "calls": 63,
-      "cost_yuan": 0.05660536769999999
+      "calls": 53,
+      "cost_yuan": 0.0486138633
     }
   ],
   "estimated": true,
-  "peak_now": false,
+  "peak_now": true,
   "unit_note": "按 DeepSeek 官方价目表估算（含峰谷与缓存价），实际以账户账单为准",
-  "generated_at": "2026-10-09T04:24:34.358835+00:00"
+  "generated_at": "2026-10-09T07:22:38.106788+00:00"
 }
