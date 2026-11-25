@@ -99,7 +99,7 @@
     }
   ],
   "estimated": true,
-  "peak_now": false,
+  "peak_now": true,
   "unit_note": "按 DeepSeek 官方价目表估算（含峰谷与缓存价），实际以账户账单为准",
-  "generated_at": "2026-11-25T00:01:20.009649+00:00"
+  "generated_at": "2026-11-25T01:22:31.860269+00:00"
 }
